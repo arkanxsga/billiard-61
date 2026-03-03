@@ -497,3 +497,28 @@ button:hover {
     font-size: 12px;
   }
 }
+/* ===== Desktop responsiveness ===== */
+@media (min-width: 1000px) {
+  .app {
+    max-width: 1100px;
+  }
+
+  .main-layout {
+    gap: 24px;
+  }
+
+  .log-panel {
+    width: 240px;
+    max-height: 500px;
+  }
+
+  .rack-track {
+    max-width: 700px;
+  }
+
+  .ball {
+    width: 36px;
+    height: 36px;
+    font-size: 16px;
+  }
+}
