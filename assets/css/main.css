@@ -522,3 +522,47 @@ button:hover {
     font-size: 16px;
   }
 }
+/* --- Prevent any accidental horizontal scroll --- */
+html, body {
+  width: 100%;
+  overflow-x: hidden;
+}
+
+/* --- Make the table/rack truly fit on small screens --- */
+@media (max-width: 600px) {
+  .table {
+    padding: 8px;
+  }
+
+  .table-inner {
+    padding: 12px 8px 14px;
+  }
+
+  /* Let the rack area grow instead of forcing one row */
+  .rack-track {
+    max-width: 100%;
+    height: auto;          /* was fixed height */
+    padding: 8px 10px;     /* tighter padding */
+  }
+
+  /* KEY FIX: allow wrapping so 15 balls don't overflow */
+  .rack {
+    justify-content: center; /* instead of flex-end */
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+}
+
+@media (max-width: 420px) {
+  /* Make balls smaller on very small phones */
+  .ball {
+    width: 24px;
+    height: 24px;
+    font-size: 11px;
+    border-width: 2px;
+  }
+
+  .rack {
+    gap: 4px;
+  }
+}
