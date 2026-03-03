@@ -26,6 +26,7 @@ function buildPlayers(count) {
   playersContainer.innerHTML = "";
 
   const customNamesForThree = ["mourad", "arkan", "konan"];
+  const playerNames = {1:"mourad",2:"arkan",3:"konan"};
 
   for (let i = 1; i <= count; i++) {
     state.scores[i] = 0;
@@ -218,7 +219,7 @@ function applyShot(ballNumber, player, isFoul) {
   if (isFoul) {
     logEvent(`Player ${player} foul with ball ${ballNumber} (-${ballNumber})`);
   } else {
-    logEvent(`Player ${player} potted ball ${ballNumber} (+${ballNumber})`);
+    logEvent(`P${player} ${playerNames[player]} potted ball ${ballNumber} (+${ballNumber})`);
   }
 }
 
