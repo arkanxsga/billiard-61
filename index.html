@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Billiard 61</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/svg+xml" href="./assets/icons/icon-192.svg" />
+  <link rel="stylesheet" href="./assets/css/main.css" />
+  <script defer src="./assets/js/no-pwa.js"></script>
+  <script defer src="./assets/js/app.js"></script>
+</head>
+  <body>
+  <div class="app">
+    <div id="playerSelectOverlay" class="player-select">
+      <h1>Billiard 61</h1>
+      <p>Select how many players:</p>
+      <div class="player-select-options">
+        <button class="player-select-option" data-count="1">1 Player</button>
+        <button class="player-select-option" data-count="2">2 Players</button>
+        <button class="player-select-option" data-count="3">3 Players</button>
+        <button class="player-select-option" data-count="4">4 Players</button>
+      </div>
+    </div>
+
+    <div id="mainContent" class="hidden">
+      <header class="header">
+        <button id="backSelect" class="icon-button back-button" title="Change players">
+          ↩
+        </button>
+        <h1>Billiard 61</h1>
+        <button id="resetGame" class="primary">New Rack</button>
+      </header>
+
+      <div class="main-layout">
+        <aside class="log-panel">
+          <div class="log-header">Log</div>
+          <div id="logList" class="log-list"></div>
+        </aside>
+
+        <div class="main-panel">
+          <div class="players" id="playersContainer"></div>
+
+          <section class="table-section">
+            <div class="table">
+              <div class="table-inner">
+                <div class="rack-track">
+                  <div class="rack" id="rack"></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div class="status" id="statusBar"></div>
+        </div>
+      </div>
+
+      <div id="leaveConfirm" class="modal-overlay hidden">
+        <div class="modal">
+          <div class="modal-title">Are you sure you want to leave?</div>
+          <div class="modal-subtitle">If you leave all progress will be lost.</div>
+          <div class="modal-actions">
+            <button id="stayHere" class="modal-btn stay">Stay</button>
+            <button id="leaveNow" class="modal-btn leave">Leave</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
