@@ -9,6 +9,7 @@ const leaveConfirmOverlay = document.getElementById("leaveConfirm");
 const stayHereBtn = document.getElementById("stayHere");
 const leaveNowBtn = document.getElementById("leaveNow");
 const logListEl = document.getElementById("logList");
+const playerNames = {1:"mourad",2:"arkan",3:"konan"};
 
 let state = {
   balls: [],
@@ -26,7 +27,6 @@ function buildPlayers(count) {
   playersContainer.innerHTML = "";
 
   const customNamesForThree = ["mourad", "arkan", "konan"];
-  const playerNames = {1:"mourad",2:"arkan",3:"konan"};
 
   for (let i = 1; i <= count; i++) {
     state.scores[i] = 0;
