@@ -521,6 +521,9 @@ button:hover {
     height: 36px;
     font-size: 16px;
   }
+
+
+ 
 }
 /* --- Prevent any accidental horizontal scroll --- */
 html, body {
@@ -593,4 +596,32 @@ html, body {
 /* Slightly bigger rack spacing */
 .rack {
   gap: 8px;
+}
+
+
+
+/* Layout: stack main content and move log to bottom */
+
+.main-layout {
+  display: flex;
+  flex-direction: column;
+}
+
+.main-panel {
+  order: 1;
+}
+
+.log-panel {
+  order: 2;
+  width: 100%;
+  max-height: 200px;
+  margin-top: 12px;
+}
+
+/* Bigger balls */
+
+.ball {
+  width: 40px;
+  height: 40px;
+  font-size: 16px;
 }
