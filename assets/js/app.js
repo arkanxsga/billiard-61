@@ -1267,6 +1267,7 @@ async function openJoinGameModal() {
         code,
         name: sanitizeGameName(game.roomName || ""),
         playerCount: Number(game.playerCount || 0),
+        ownerId: String(game.ownerId || ""),
         activeSeats,
         activeOthers,
         updatedAt: Number(game.updatedAt || 0),
@@ -1276,8 +1277,10 @@ async function openJoinGameModal() {
       (game) =>
         game.name &&
         game.playerCount > 0 &&
-        game.activeSeats > 0 &&
-        game.activeOthers > 0
+        (
+          game.ownerId !== localProfile.id ||
+          game.activeOthers > 0
+        )
     )
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 50);
