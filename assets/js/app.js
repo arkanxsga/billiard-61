@@ -10,8 +10,6 @@ import {
   get,
   onValue,
   update,
-  remove,
-  onDisconnect,
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
 
 const firebaseConfig = {
@@ -23,6 +21,9 @@ const firebaseConfig = {
   appId: "1:353223372621:web:c40710808be8afb243d104",
 };
 
+const ROOM_PATH = "games/mainRoom";
+const PROFILES_PATH = "profiles";
+const PROFILE_STORAGE_KEY = "billiard61.profile";
 const MAX_LOG_ENTRIES = 80;
 const MAX_UNDO_HISTORY = 150;
 const CLIENT_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -48,6 +49,7 @@ const rackEl = document.getElementById("rack");
 const resetGameBtn = document.getElementById("resetGame");
 const playersContainer = document.getElementById("playersContainer");
 const playerSelectOverlay = document.getElementById("playerSelectOverlay");
+const playerSelectButtons = document.querySelectorAll(".player-select-option");
 const mainContent = document.getElementById("mainContent");
 const backSelectBtn = document.getElementById("backSelect");
 const leaveConfirmOverlay = document.getElementById("leaveConfirm");
@@ -55,41 +57,76 @@ const stayHereBtn = document.getElementById("stayHere");
 const leaveNowBtn = document.getElementById("leaveNow");
 const logListEl = document.getElementById("logList");
 const undoLastBtn = document.getElementById("undoLast");
+const redoLastBtn = document.getElementById("redoLast");
 const statusBar = document.getElementById("statusBar");
 const offlineOverlayId = "offlineRequiredOverlay";
 
-const lobbyHomeEl = document.getElementById("lobbyHome");
-const createGamePanelEl = document.getElementById("createGamePanel");
-const joinGamePanelEl = document.getElementById("joinGamePanel");
-const showCreateGameBtn = document.getElementById("showCreateGame");
-const showJoinGameBtn = document.getElementById("showJoinGame");
-const createGameNameInput = document.getElementById("createGameName");
-const createGamePlayersSelect = document.getElementById("createGamePlayers");
-const createGameSubmitBtn = document.getElementById("createGameSubmit");
-const createGameBackBtn = document.getElementById("createGameBack");
-const joinGameBackBtn = document.getElementById("joinGameBack");
-const refreshJoinListBtn = document.getElementById("refreshJoinList");
-const joinGameListEl = document.getElementById("joinGameList");
-
-let db = null;
-let gamesRef = null;
-let lobbyUnsubscribe = null;
-let roomStateUnsubscribe = null;
-
-let currentRoomId = "";
-let currentRoomName = "";
-let currentRoomRef = null;
-let currentRoomStateRef = null;
-let participantRef = null;
-
+let roomRef = null;
+let dbInstance = null;
 let saveQueue = Promise.resolve();
-let lobbyRooms = {};
+let localProfile = loadLocalProfile();
 
 let state = {
   game: createDefaultGameState(),
   selectedBalls: new Set(),
   history: [],
+  redoHistory: [],
 };
+
+function createProfileId() {
+  return `u-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function sanitizeName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 24);
+}
+
+function loadLocalProfile() {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(localStorage.getItem(PROFILE_STORAGE_KEY) || "null");
+  } catch {
+    parsed = null;
+  }
+
+  const id =
+    parsed && typeof parsed.id === "string" && parsed.id.trim()
+      ? parsed.id.trim()
+      : createProfileId();
+  const name = sanitizeName(parsed?.name || "");
+  return { id, name };
+}
+
+function saveLocalProfile() {
+  localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(localProfile));
+}
+
+function ensureLocalProfileName() {
+  if (localProfile.name) return;
+
+  const enteredName = sanitizeName(
+    window.prompt("Enter your name:", localProfile.name || "") || ""
+  );
+  const fallbackName = `Player-${localProfile.id.slice(-4)}`;
+  localProfile.name = enteredName || fallbackName;
+  saveLocalProfile();
+}
+
+async function syncLocalProfileToDatabase() {
+  if (!dbInstance || !localProfile.id || !localProfile.name) return;
+
+  try {
+    await update(ref(dbInstance, `${PROFILES_PATH}/${localProfile.id}`), {
+      name: localProfile.name,
+      updatedAt: Date.now(),
+    });
+  } catch (error) {
+    console.error("Failed to sync local profile:", error);
+  }
+}
 
 function createDefaultBalls() {
   const balls = [];
@@ -113,13 +150,9 @@ function createZeroMap(count) {
 }
 
 function createPlayerNames(count) {
-  const customNamesForThree = ["mourad", "arkan", "konan"];
   const names = {};
   for (let i = 1; i <= count; i++) {
-    names[i] =
-      count === 3 && customNamesForThree[i - 1]
-        ? customNamesForThree[i - 1]
-        : `Player ${i}`;
+    names[i] = `Player ${i}`;
   }
   return names;
 }
@@ -128,6 +161,9 @@ function createDefaultGameState() {
   return {
     playerCount: 0,
     playerNames: {},
+    seatAssignments: {},
+    ownerId: "",
+    ownerName: "",
     currentTurn: 1,
     scores: {},
     foulOnlyCounts: {},
@@ -140,24 +176,13 @@ function createDefaultGameState() {
   };
 }
 
-function createInitialGameState(playerCount, roomName) {
-  const game = createDefaultGameState();
-  game.playerCount = playerCount;
-  game.playerNames = createPlayerNames(playerCount);
-  game.currentTurn = 1;
-  game.scores = createZeroMap(playerCount);
-  game.foulOnlyCounts = createZeroMap(playerCount);
-  recalculateScoresForGame(game);
-  updatePottedBallsForGame(game);
-  addLogEntryToGame(game, `Game "${roomName}" created`);
-  addLogEntryToGame(game, "New rack started");
-  return game;
-}
-
 function serializeGameState(game) {
   return {
     playerCount: game.playerCount,
     playerNames: { ...game.playerNames },
+    seatAssignments: { ...(game.seatAssignments || {}) },
+    ownerId: game.ownerId || "",
+    ownerName: game.ownerName || "",
     currentTurn: game.currentTurn,
     scores: { ...game.scores },
     foulOnlyCounts: { ...game.foulOnlyCounts },
@@ -213,6 +238,21 @@ function normalizeGameState(raw) {
   const playerCount = normalizeCount(raw.playerCount);
   normalized.playerCount = playerCount;
   normalized.playerNames = createPlayerNames(playerCount);
+  normalized.ownerId =
+    typeof raw.ownerId === "string" ? raw.ownerId.trim() : "";
+  normalized.ownerName = sanitizeName(raw.ownerName || "");
+
+  if (raw.seatAssignments && typeof raw.seatAssignments === "object") {
+    for (let i = 1; i <= playerCount; i++) {
+      const incomingSeat =
+        raw.seatAssignments[i] !== undefined
+          ? raw.seatAssignments[i]
+          : raw.seatAssignments[String(i)];
+      if (typeof incomingSeat === "string" && incomingSeat.trim()) {
+        normalized.seatAssignments[i] = incomingSeat.trim();
+      }
+    }
+  }
 
   if (raw.playerNames && typeof raw.playerNames === "object") {
     for (let i = 1; i <= playerCount; i++) {
@@ -221,8 +261,16 @@ function normalizeGameState(raw) {
           ? raw.playerNames[i]
           : raw.playerNames[String(i)];
       if (typeof incoming === "string" && incoming.trim()) {
-        normalized.playerNames[i] = incoming.trim();
+        normalized.playerNames[i] = sanitizeName(incoming);
       }
+    }
+  }
+
+  for (let i = 1; i <= playerCount; i++) {
+    if (!normalized.seatAssignments[i]) {
+      normalized.playerNames[i] = `Player ${i}`;
+    } else if (!normalized.playerNames[i]) {
+      normalized.playerNames[i] = `Player ${i}`;
     }
   }
 
@@ -354,8 +402,55 @@ function computeWinnerForGame(game) {
   return tie ? null : bestPlayer;
 }
 
+function isGameFinished(game) {
+  return (
+    game.playerCount > 0 &&
+    Array.isArray(game.balls) &&
+    !game.balls.some((ball) => ball.locationType === "rack")
+  );
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function getDisplayPlayerName(player, game = state.game) {
+  const seatOwner = game.seatAssignments?.[player];
+  if (!seatOwner) return `Player ${player}`;
+  const storedName = sanitizeName(game.playerNames?.[player] || "");
+  return storedName || `Player ${player}`;
+}
+
+function getCurrentUserSeat() {
+  for (let i = 1; i <= state.game.playerCount; i++) {
+    if (state.game.seatAssignments?.[i] === localProfile.id) {
+      return i;
+    }
+  }
+  return null;
+}
+
+function canCurrentUserStartNewGame() {
+  if (state.game.playerCount === 0) return false;
+  return Boolean(state.game.ownerId && state.game.ownerId === localProfile.id);
+}
+
+function updateNewGameButtonState() {
+  if (!resetGameBtn) return;
+  const isOwner = canCurrentUserStartNewGame();
+  resetGameBtn.disabled = state.game.playerCount === 0 || !isOwner;
+  resetGameBtn.title = isOwner
+    ? "Start a new game"
+    : "Only the game creator can start a new game";
+}
+
 function getPlayerLabel(player) {
-  const name = state.game.playerNames[player] || `Player ${player}`;
+  const name = getDisplayPlayerName(player);
   return `P${player} ${name}`;
 }
 
@@ -391,16 +486,12 @@ function createLogEntry(message) {
   };
 }
 
-function addLogEntryToGame(game, message) {
-  if (!message) return;
-  game.log.unshift(createLogEntry(message));
-  if (game.log.length > MAX_LOG_ENTRIES) {
-    game.log = game.log.slice(0, MAX_LOG_ENTRIES);
-  }
-}
-
 function addLogEntry(message) {
-  addLogEntryToGame(state.game, message);
+  if (!message) return;
+  state.game.log.unshift(createLogEntry(message));
+  if (state.game.log.length > MAX_LOG_ENTRIES) {
+    state.game.log = state.game.log.slice(0, MAX_LOG_ENTRIES);
+  }
 }
 
 function buildLastAction(type, message) {
@@ -421,24 +512,35 @@ function saveUndoPoint() {
   if (state.history.length > MAX_UNDO_HISTORY) {
     state.history.shift();
   }
-  updateUndoButtonState();
+  state.redoHistory = [];
+  updateUndoRedoButtonState();
 }
 
 function clearUndoHistory() {
   state.history = [];
-  updateUndoButtonState();
+  state.redoHistory = [];
+  updateUndoRedoButtonState();
 }
 
-function updateUndoButtonState() {
-  if (!undoLastBtn) return;
-  undoLastBtn.disabled = state.history.length === 0;
+function updateUndoRedoButtonState() {
+  if (undoLastBtn) {
+    undoLastBtn.disabled = state.history.length === 0;
+  }
+  if (redoLastBtn) {
+    redoLastBtn.disabled = state.redoHistory.length === 0;
+  }
 }
 
 function undoLastAction() {
   const snapshot = state.history.pop();
   if (!snapshot) {
-    updateUndoButtonState();
+    updateUndoRedoButtonState();
     return;
+  }
+
+  state.redoHistory.push(snapshotForUndo());
+  if (state.redoHistory.length > MAX_UNDO_HISTORY) {
+    state.redoHistory.shift();
   }
 
   state.game = normalizeGameState(snapshot);
@@ -446,7 +548,27 @@ function undoLastAction() {
   clearSelectedBalls();
   renderAll();
   persistGameState("undo", "Undo last action");
-  updateUndoButtonState();
+  updateUndoRedoButtonState();
+}
+
+function redoLastAction() {
+  const snapshot = state.redoHistory.pop();
+  if (!snapshot) {
+    updateUndoRedoButtonState();
+    return;
+  }
+
+  state.history.push(snapshotForUndo());
+  if (state.history.length > MAX_UNDO_HISTORY) {
+    state.history.shift();
+  }
+
+  state.game = normalizeGameState(snapshot);
+  addLogEntry("Redo last action");
+  clearSelectedBalls();
+  renderAll();
+  persistGameState("redo", "Redo last action");
+  updateUndoRedoButtonState();
 }
 
 function formatLogTime(timestamp) {
@@ -551,15 +673,23 @@ function buildPlayersUI() {
   playersContainer.innerHTML = "";
 
   for (let i = 1; i <= state.game.playerCount; i++) {
-    const displayName = state.game.playerNames[i] || `Player ${i}`;
+    const displayName = getDisplayPlayerName(i);
+    const seatOwner = state.game.seatAssignments?.[i] || "";
+    const isMySeat = seatOwner === localProfile.id;
+    const seatLabel = isMySeat ? "Seated" : seatOwner ? "Take Seat" : "Sit Here";
     const player = document.createElement("div");
     player.className = "player";
     player.dataset.player = String(i);
 
     player.innerHTML = `
       <div class="player-header">
-        <span class="player-name">${displayName}</span>
-        <span class="score" id="scoreP${i}">0</span>
+        <span class="player-name">${escapeHtml(displayName)}</span>
+        <div class="player-header-right">
+          <button class="seat-btn${isMySeat ? " current" : ""}" data-player="${i}">
+            ${seatLabel}
+          </button>
+          <span class="score" id="scoreP${i}">0</span>
+        </div>
       </div>
       <div class="player-areas">
         <div class="drop-zone clean" data-player="${i}" data-type="clean">
@@ -627,27 +757,26 @@ function renderPositions() {
 function renderStatus() {
   if (!statusBar) return;
 
-  if (!currentRoomId || state.game.playerCount === 0) {
+  if (state.game.playerCount === 0) {
     statusBar.textContent = "";
     return;
   }
 
   if (state.game.winner) {
-    const winnerName =
-      state.game.playerNames[state.game.winner] || `Player ${state.game.winner}`;
+    const winnerName = getDisplayPlayerName(state.game.winner);
     const winnerScore = state.game.scores[state.game.winner] ?? 0;
-    statusBar.textContent = `${currentRoomName}: Winner ${winnerName} (${winnerScore})`;
+    statusBar.textContent = `Winner: ${winnerName} (${winnerScore})`;
     return;
   }
 
-  const turnName =
-    state.game.playerNames[state.game.currentTurn] ||
-    `Player ${state.game.currentTurn}`;
-  statusBar.textContent = `${currentRoomName}: Current turn ${turnName}`;
+  const turnName = getDisplayPlayerName(state.game.currentTurn);
+  statusBar.textContent = `Current turn: ${turnName}`;
 }
 
 function renderLayoutVisibility() {
-  if (currentRoomId) {
+  const hasActiveGame = state.game.playerCount > 0;
+
+  if (hasActiveGame) {
     playerSelectOverlay.classList.add("hidden");
     mainContent.classList.remove("hidden");
     return;
@@ -661,7 +790,7 @@ function renderAll() {
   ensureCurrentTurnIsValid();
   renderLayoutVisibility();
 
-  if (currentRoomId && state.game.playerCount > 0) {
+  if (state.game.playerCount > 0) {
     buildPlayersUI();
     renderPositions();
     renderScores();
@@ -672,7 +801,8 @@ function renderAll() {
 
   renderLog();
   renderStatus();
-  updateUndoButtonState();
+  updateUndoRedoButtonState();
+  updateNewGameButtonState();
 }
 
 function refreshSelectionVisuals() {
@@ -737,9 +867,7 @@ function getDropBallNumber(event) {
 }
 
 function rackCompletionMessage(previousHadRack) {
-  const anyOnRackNow = state.game.balls.some(
-    (ball) => ball.locationType === "rack"
-  );
+  const anyOnRackNow = state.game.balls.some((ball) => ball.locationType === "rack");
   if (anyOnRackNow) {
     state.game.winner = null;
     return null;
@@ -762,17 +890,17 @@ function rackCompletionMessage(previousHadRack) {
 
   if (tie) {
     state.game.winner = null;
-    return previousHadRack ? `Rack finished: tie at ${bestScore}` : null;
+    return previousHadRack ? `Game finished: tie at ${bestScore}` : null;
   }
 
   state.game.winner = bestPlayer;
   return previousHadRack
-    ? `Rack finished: Player ${bestPlayer} wins (${bestScore})`
+    ? `Game finished: ${getDisplayPlayerName(bestPlayer)} wins (${bestScore})`
     : null;
 }
 
 function persistGameState(actionType, actionMessage) {
-  if (!currentRoomStateRef || !currentRoomRef) return;
+  if (!roomRef) return;
 
   recalculateScoresForGame(state.game);
   updatePottedBallsForGame(state.game);
@@ -782,16 +910,8 @@ function persistGameState(actionType, actionMessage) {
   state.game.updatedAt = Date.now();
 
   const payload = serializeGameState(state.game);
-  const roomMeta = { updatedAt: Date.now() };
-
   saveQueue = saveQueue
-    .then(async () => {
-      await update(currentRoomStateRef, payload);
-      await update(currentRoomRef, roomMeta);
-      if (participantRef) {
-        await update(participantRef, { updatedAt: Date.now() });
-      }
-    })
+    .then(() => update(roomRef, payload))
     .catch((error) => {
       console.error("Failed to sync game state:", error);
     });
@@ -811,9 +931,7 @@ function applyShots(ballNumbers, player, isFoul) {
 
   saveUndoPoint();
 
-  const previousHadRack = state.game.balls.some(
-    (ball) => ball.locationType === "rack"
-  );
+  const previousHadRack = state.game.balls.some((ball) => ball.locationType === "rack");
 
   numbersToApply.forEach((number) => {
     const ball = state.game.balls.find((item) => item.number === number);
@@ -829,14 +947,14 @@ function applyShots(ballNumbers, player, isFoul) {
   if (numbersToApply.length === 1) {
     const number = numbersToApply[0];
     if (isFoul) {
-      addLogEntry(`Player ${player} foul with ball ${number} (-${number})`);
+      addLogEntry(`${getPlayerLabel(player)} foul with ball ${number} (-${number})`);
     } else {
       addLogEntry(`${getPlayerLabel(player)} potted ball ${number} (+${number})`);
     }
   } else {
     const joined = numbersToApply.join(", ");
     if (isFoul) {
-      addLogEntry(`Player ${player} foul with balls ${joined}`);
+      addLogEntry(`${getPlayerLabel(player)} foul with balls ${joined}`);
     } else {
       addLogEntry(`${getPlayerLabel(player)} potted balls ${joined}`);
     }
@@ -894,7 +1012,7 @@ function applyFoulOnly(player) {
   updatePottedBallsForGame(state.game);
   advanceTurnFromPlayer(player);
 
-  addLogEntry(`Player ${player} foul (no ball) -4`);
+  addLogEntry(`${getPlayerLabel(player)} foul (no ball) -4`);
 
   const completionMessage = rackCompletionMessage(false);
   if (completionMessage) {
@@ -905,34 +1023,148 @@ function applyFoulOnly(player) {
   persistGameState("foul_only", "Foul without ball");
 }
 
-function startNewRack() {
+function seatCurrentUser(player) {
+  const playerIndex = Number(player);
+  if (
+    !Number.isInteger(playerIndex) ||
+    playerIndex < 1 ||
+    playerIndex > state.game.playerCount
+  ) {
+    return;
+  }
+
+  const previousSeat = getCurrentUserSeat();
+  if (previousSeat === playerIndex) return;
+
+  const replacedUser = state.game.seatAssignments[playerIndex] || "";
+  for (let i = 1; i <= state.game.playerCount; i++) {
+    if (state.game.seatAssignments[i] === localProfile.id) {
+      delete state.game.seatAssignments[i];
+      state.game.playerNames[i] = `Player ${i}`;
+    }
+  }
+
+  state.game.seatAssignments[playerIndex] = localProfile.id;
+  state.game.playerNames[playerIndex] = localProfile.name;
+
+  for (let i = 1; i <= state.game.playerCount; i++) {
+    if (!state.game.seatAssignments[i]) {
+      state.game.playerNames[i] = `Player ${i}`;
+    }
+  }
+
+  if (previousSeat) {
+    addLogEntry(
+      `${localProfile.name} moved from Player ${previousSeat} to Player ${playerIndex}`
+    );
+  } else if (replacedUser && replacedUser !== localProfile.id) {
+    addLogEntry(`${localProfile.name} took Player ${playerIndex}`);
+  } else {
+    addLogEntry(`${localProfile.name} sat on Player ${playerIndex}`);
+  }
+
+  renderAll();
+  persistGameState("seat_player", `${localProfile.name} seated on Player ${playerIndex}`);
+}
+
+function syncMySeatNameIfNeeded() {
+  const mySeat = getCurrentUserSeat();
+  if (!mySeat) return;
+  if (state.game.playerNames[mySeat] === localProfile.name) return;
+
+  state.game.playerNames[mySeat] = localProfile.name;
+  renderAll();
+  persistGameState("sync_name", "Seat name synced");
+}
+
+function startNewGame() {
   if (state.game.playerCount === 0) return;
+  if (!canCurrentUserStartNewGame()) {
+    window.alert("Only the game creator can start a new game.");
+    return;
+  }
+  if (!window.confirm("Are you sure you want to start a new game?")) {
+    return;
+  }
 
   const playerCount = state.game.playerCount;
   const playerNames = { ...state.game.playerNames };
-  const existingLog = [...state.game.log];
+  const seatAssignments = { ...(state.game.seatAssignments || {}) };
+  const ownerId = state.game.ownerId || localProfile.id;
+  const ownerName = state.game.ownerName || localProfile.name;
 
   state.game = createDefaultGameState();
   state.game.playerCount = playerCount;
   state.game.playerNames = playerNames;
+  state.game.seatAssignments = seatAssignments;
+  state.game.ownerId = ownerId;
+  state.game.ownerName = ownerName;
   state.game.currentTurn = 1;
   state.game.scores = createZeroMap(playerCount);
   state.game.foulOnlyCounts = createZeroMap(playerCount);
   state.game.balls = createDefaultBalls();
-  state.game.log = existingLog;
+
+  for (let i = 1; i <= playerCount; i++) {
+    if (!state.game.seatAssignments[i]) {
+      state.game.playerNames[i] = `Player ${i}`;
+    }
+  }
 
   updatePottedBallsForGame(state.game);
 
-  addLogEntry("New rack started");
+  addLogEntry(`New game started by ${localProfile.name}`);
   clearUndoHistory();
   clearSelectedBalls();
   renderAll();
-  persistGameState("new_rack", "New rack started");
+  persistGameState("new_game", "New game started");
+}
+
+function selectPlayerCount(count) {
+  const playerCount = normalizeCount(count);
+  if (playerCount <= 0) return;
+
+  state.game = createDefaultGameState();
+  state.game.playerCount = playerCount;
+  state.game.playerNames = createPlayerNames(playerCount);
+  state.game.seatAssignments = {};
+  state.game.ownerId = localProfile.id;
+  state.game.ownerName = localProfile.name;
+  state.game.currentTurn = 1;
+  state.game.scores = createZeroMap(playerCount);
+  state.game.foulOnlyCounts = createZeroMap(playerCount);
+  state.game.balls = createDefaultBalls();
+
+  recalculateScoresForGame(state.game);
+  updatePottedBallsForGame(state.game);
+
+  addLogEntry(`Players set: ${playerCount}`);
+  addLogEntry(`Game created by ${localProfile.name}`);
+
+  clearUndoHistory();
+  clearSelectedBalls();
+  renderAll();
+  persistGameState("select_players", `Players set: ${playerCount}`);
+}
+
+function resetToPlayerSelection() {
+  state.game = createDefaultGameState();
+  addLogEntry("Game reset");
+
+  clearUndoHistory();
+  clearSelectedBalls();
+
+  if (leaveConfirmOverlay) {
+    leaveConfirmOverlay.classList.add("hidden");
+  }
+
+  renderAll();
+  persistGameState("reset_game", "Game reset");
 }
 
 function attachPlayerHandlers() {
   const foulOnlyButtons = document.querySelectorAll(".foul-only-btn");
   const dropZones = document.querySelectorAll(".drop-zone");
+  const seatButtons = document.querySelectorAll(".seat-btn");
 
   foulOnlyButtons.forEach((button) => {
     button.addEventListener("click", () => {
@@ -978,6 +1210,14 @@ function attachPlayerHandlers() {
       applyShots(numbers, player, isFoul);
     });
   });
+
+  seatButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const player = Number(button.dataset.player);
+      if (!player) return;
+      seatCurrentUser(player);
+    });
+  });
 }
 
 function applyRemoteState(game, isInitialRead = false) {
@@ -992,336 +1232,81 @@ function applyRemoteState(game, isInitialRead = false) {
   }
 
   renderAll();
+  syncMySeatNameIfNeeded();
 }
 
-function normalizeRoomList(rawRooms) {
-  if (!rawRooms || typeof rawRooms !== "object") return {};
-  return rawRooms;
-}
+async function initializeRealtimeRoom() {
+  const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+  dbInstance = getDatabase(app);
+  roomRef = ref(dbInstance, ROOM_PATH);
 
-function getParticipantCount(participants) {
-  if (!participants || typeof participants !== "object") return 0;
-  return Object.keys(participants).length;
-}
+  await syncLocalProfileToDatabase();
 
-function showLobbyView(view) {
-  const showHome = view === "home";
-  const showCreate = view === "create";
-  const showJoin = view === "join";
-
-  if (lobbyHomeEl) lobbyHomeEl.classList.toggle("hidden", !showHome);
-  if (createGamePanelEl) createGamePanelEl.classList.toggle("hidden", !showCreate);
-  if (joinGamePanelEl) joinGamePanelEl.classList.toggle("hidden", !showJoin);
-}
-
-function renderLobbyRooms() {
-  if (!joinGameListEl) return;
-  joinGameListEl.innerHTML = "";
-
-  const rooms = Object.entries(lobbyRooms)
-    .map(([id, room]) => ({ id, ...(room || {}) }))
-    .filter((room) => normalizeCount(room.maxPlayers) >= 2)
-    .sort(
-      (a, b) =>
-        Number(b.updatedAt || b.createdAt || 0) -
-        Number(a.updatedAt || a.createdAt || 0)
-    );
-
-  if (rooms.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "join-game-empty";
-    empty.textContent = "No multiplayer games yet.";
-    joinGameListEl.appendChild(empty);
-    return;
-  }
-
-  rooms.forEach((room) => {
-    const roomName = String(room.roomName || "Unnamed Game");
-    const maxPlayers = normalizeCount(room.maxPlayers) || 2;
-    const count = getParticipantCount(room.participants);
-    const full = count >= maxPlayers;
-
-    const row = document.createElement("div");
-    row.className = "join-game-item";
-
-    const meta = document.createElement("div");
-    meta.className = "join-game-meta";
-
-    const nameEl = document.createElement("div");
-    nameEl.className = "join-game-name";
-    nameEl.textContent = roomName;
-
-    const playersEl = document.createElement("div");
-    playersEl.className = "join-game-players";
-    playersEl.textContent = `${count}/${maxPlayers} players`;
-
-    meta.appendChild(nameEl);
-    meta.appendChild(playersEl);
-
-    const joinBtn = document.createElement("button");
-    joinBtn.className = "secondary";
-
-    if (currentRoomId === room.id) {
-      joinBtn.textContent = "Joined";
-      joinBtn.disabled = true;
-    } else if (full) {
-      joinBtn.textContent = "Full";
-      joinBtn.disabled = true;
-    } else {
-      joinBtn.textContent = "Join";
-      joinBtn.addEventListener("click", () => {
-        joinRoom(room.id);
-      });
-    }
-
-    row.appendChild(meta);
-    row.appendChild(joinBtn);
-    joinGameListEl.appendChild(row);
-  });
-}
-
-function createRoomId(name) {
-  const slug = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 20);
-
-  const safeSlug = slug || "game";
-  const suffix = Date.now().toString(36);
-  return `${safeSlug}-${suffix}`;
-}
-
-async function refreshLobbyRooms() {
-  if (!gamesRef) return;
-  const snapshot = await get(gamesRef);
-  lobbyRooms = snapshot.exists() ? normalizeRoomList(snapshot.val()) : {};
-  renderLobbyRooms();
-}
-
-async function createGameRoom() {
-  if (!db) return;
-
-  const maxPlayers = normalizeCount(createGamePlayersSelect?.value || "0");
-  if (maxPlayers < 1 || maxPlayers > 4) return;
-
-  const rawName = (createGameNameInput?.value || "").trim();
-  const roomName = rawName || `Game ${new Date().toLocaleTimeString()}`;
-  const roomId = createRoomId(roomName);
-
-  const initialState = createInitialGameState(maxPlayers, roomName);
-  const now = Date.now();
-
-  const payload = {
-    roomId,
-    roomName,
-    maxPlayers,
-    createdAt: now,
-    updatedAt: now,
-    participants: {},
-    state: serializeGameState(initialState),
-  };
-
-  await set(ref(db, `games/${roomId}`), payload);
-  await joinRoom(roomId);
-}
-
-async function registerPresence() {
-  if (!currentRoomRef || !currentRoomId || !db) return;
-
-  participantRef = ref(db, `games/${currentRoomId}/participants/${CLIENT_ID}`);
-  await set(participantRef, {
-    joinedAt: Date.now(),
-    updatedAt: Date.now(),
-  });
-
-  const disconnectOps = onDisconnect(participantRef);
-  disconnectOps.remove();
-}
-
-async function joinRoom(roomId) {
-  if (!db || !roomId) return;
-
-  const roomRef = ref(db, `games/${roomId}`);
   const snapshot = await get(roomRef);
-  if (!snapshot.exists()) {
-    await refreshLobbyRooms();
-    return;
-  }
+  if (snapshot.exists()) {
+    let loadedState = normalizeGameState(snapshot.val());
+    let shouldWriteBack = false;
 
-  const room = snapshot.val() || {};
-  const maxPlayers = normalizeCount(room.maxPlayers);
-  if (maxPlayers < 1 || maxPlayers > 4) return;
-
-  const participantCount = getParticipantCount(room.participants);
-  const alreadyJoined = !!(room.participants && room.participants[CLIENT_ID]);
-
-  if (!alreadyJoined && participantCount >= maxPlayers) {
-    alert("This game is full.");
-    return;
-  }
-
-  if (currentRoomId && currentRoomId !== roomId) {
-    await leaveCurrentRoom({ renderAfterLeave: false });
-  }
-
-  currentRoomId = roomId;
-  currentRoomName = String(room.roomName || "Game");
-  currentRoomRef = roomRef;
-  currentRoomStateRef = ref(db, `games/${roomId}/state`);
-
-  await registerPresence();
-
-  if (roomStateUnsubscribe) {
-    roomStateUnsubscribe();
-    roomStateUnsubscribe = null;
-  }
-
-  roomStateUnsubscribe = onValue(currentRoomStateRef, async (roomStateSnapshot) => {
-    if (roomStateSnapshot.exists()) {
-      applyRemoteState(roomStateSnapshot.val(), false);
-      return;
-    }
-
-    const freshState = createInitialGameState(maxPlayers, currentRoomName);
-    await set(currentRoomStateRef, serializeGameState(freshState));
-    applyRemoteState(freshState, true);
-  });
-
-  if (room.state) {
-    applyRemoteState(room.state, true);
-  } else {
-    const freshState = createInitialGameState(maxPlayers, currentRoomName);
-    await set(currentRoomStateRef, serializeGameState(freshState));
-    applyRemoteState(freshState, true);
-  }
-
-  showLobbyView("home");
-  renderAll();
-}
-
-async function leaveCurrentRoom(options = {}) {
-  const { renderAfterLeave = true } = options;
-
-  if (!currentRoomId) {
-    if (renderAfterLeave) {
-      renderAll();
-      showLobbyView("home");
-    }
-    return;
-  }
-
-  const leavingRoomId = currentRoomId;
-  const leavingRoomRef = currentRoomRef;
-  const leavingParticipantRef = participantRef;
-
-  if (roomStateUnsubscribe) {
-    roomStateUnsubscribe();
-    roomStateUnsubscribe = null;
-  }
-
-  currentRoomId = "";
-  currentRoomName = "";
-  currentRoomRef = null;
-  currentRoomStateRef = null;
-  participantRef = null;
-
-  state.game = createDefaultGameState();
-  clearSelectedBalls();
-  clearUndoHistory();
-
-  if (leavingParticipantRef) {
-    try {
-      await remove(leavingParticipantRef);
-    } catch (error) {
-      console.error("Failed to remove participant:", error);
-    }
-  }
-
-  if (leavingRoomRef) {
-    try {
-      const participantsSnap = await get(
-        ref(db, `games/${leavingRoomId}/participants`)
+    if (isGameFinished(loadedState)) {
+      loadedState = createDefaultGameState();
+      loadedState.lastAction = buildLastAction(
+        "clear_finished_game",
+        "Finished game cleared from storage"
       );
-      const remaining = participantsSnap.exists()
-        ? Object.keys(participantsSnap.val() || {}).length
-        : 0;
-
-      if (remaining === 0) {
-        await remove(leavingRoomRef);
-      } else {
-        await update(leavingRoomRef, { updatedAt: Date.now() });
-      }
-    } catch (error) {
-      console.error("Failed to update room after leaving:", error);
+      loadedState.updatedAt = Date.now();
+      shouldWriteBack = true;
+    } else if (loadedState.playerCount > 0 && !loadedState.ownerId) {
+      loadedState.ownerId = localProfile.id;
+      loadedState.ownerName = localProfile.name;
+      loadedState.lastAction = buildLastAction("set_owner", "Owner assigned");
+      loadedState.updatedAt = Date.now();
+      shouldWriteBack = true;
     }
+
+    if (shouldWriteBack) {
+      await set(roomRef, serializeGameState(loadedState));
+    }
+
+    applyRemoteState(loadedState, true);
+  } else {
+    const defaultState = createDefaultGameState();
+    defaultState.lastAction = buildLastAction("init", "Initial game state created");
+    defaultState.updatedAt = Date.now();
+    await set(roomRef, serializeGameState(defaultState));
+    applyRemoteState(defaultState, true);
   }
 
-  if (leaveConfirmOverlay) {
-    leaveConfirmOverlay.classList.add("hidden");
-  }
-
-  if (renderAfterLeave) {
-    renderAll();
-    showLobbyView("home");
-    await refreshLobbyRooms();
-  }
-}
-
-function attachLobbyHandlers() {
-  if (showCreateGameBtn) {
-    showCreateGameBtn.addEventListener("click", () => {
-      showLobbyView("create");
-    });
-  }
-
-  if (showJoinGameBtn) {
-    showJoinGameBtn.addEventListener("click", () => {
-      showLobbyView("join");
-      renderLobbyRooms();
-    });
-  }
-
-  if (createGameBackBtn) {
-    createGameBackBtn.addEventListener("click", () => {
-      showLobbyView("home");
-    });
-  }
-
-  if (joinGameBackBtn) {
-    joinGameBackBtn.addEventListener("click", () => {
-      showLobbyView("home");
-    });
-  }
-
-  if (refreshJoinListBtn) {
-    refreshJoinListBtn.addEventListener("click", () => {
-      refreshLobbyRooms();
-    });
-  }
-
-  if (createGameSubmitBtn) {
-    createGameSubmitBtn.addEventListener("click", () => {
-      createGameRoom();
-    });
-  }
+  onValue(roomRef, (roomSnapshot) => {
+    if (!roomSnapshot.exists()) return;
+    applyRemoteState(roomSnapshot.val(), false);
+  });
 }
 
 function attachStaticEventHandlers() {
   if (undoLastBtn) {
     undoLastBtn.addEventListener("click", undoLastAction);
-    updateUndoButtonState();
+    updateUndoRedoButtonState();
+  }
+
+  if (redoLastBtn) {
+    redoLastBtn.addEventListener("click", redoLastAction);
+    updateUndoRedoButtonState();
   }
 
   if (resetGameBtn) {
-    resetGameBtn.addEventListener("click", startNewRack);
+    resetGameBtn.addEventListener("click", startNewGame);
   }
 
-  attachLobbyHandlers();
+  playerSelectButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const count = Number(btn.dataset.count);
+      selectPlayerCount(count);
+    });
+  });
 
   if (backSelectBtn) {
     backSelectBtn.addEventListener("click", () => {
-      if (leaveConfirmOverlay && currentRoomId) {
+      if (leaveConfirmOverlay) {
         leaveConfirmOverlay.classList.remove("hidden");
       }
     });
@@ -1335,7 +1320,7 @@ function attachStaticEventHandlers() {
 
   if (leaveNowBtn) {
     leaveNowBtn.addEventListener("click", () => {
-      leaveCurrentRoom();
+      resetToPlayerSelection();
     });
   }
 
@@ -1371,34 +1356,6 @@ function attachStaticEventHandlers() {
       moveBallsToRack([ballNumber]);
     });
   }
-
-  window.addEventListener("beforeunload", () => {
-    if (participantRef) {
-      remove(participantRef);
-    }
-  });
-}
-
-function startLobbyRealtimeListener() {
-  if (!gamesRef) return;
-
-  if (lobbyUnsubscribe) {
-    lobbyUnsubscribe();
-  }
-
-  lobbyUnsubscribe = onValue(gamesRef, (snapshot) => {
-    lobbyRooms = snapshot.exists() ? normalizeRoomList(snapshot.val()) : {};
-    renderLobbyRooms();
-  });
-}
-
-async function initializeRealtime() {
-  const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-  db = getDatabase(app);
-  gamesRef = ref(db, "games");
-
-  startLobbyRealtimeListener();
-  await refreshLobbyRooms();
 }
 
 async function init() {
@@ -1406,14 +1363,13 @@ async function init() {
     return;
   }
 
-  showLobbyView("home");
+  ensureLocalProfileName();
   attachStaticEventHandlers();
-  renderAll();
 
   try {
-    await initializeRealtime();
+    await initializeRealtimeRoom();
   } catch (error) {
-    console.error("Failed to initialize multiplayer lobby:", error);
+    console.error("Failed to initialize multiplayer sync:", error);
     showOfflineRequiredOverlay();
   }
 }

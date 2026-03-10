@@ -37,6 +37,8 @@ h1 {
 .header-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 button {
@@ -164,12 +166,35 @@ button:hover:not(:disabled) {
 .player-header {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   font-weight: 600;
   margin-bottom: 8px;
 }
 
+.player-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .player-name {
   font-size: 16px;
+}
+
+.seat-btn {
+  background: #2f7149;
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 4px 8px;
+  line-height: 1;
+}
+
+.seat-btn:hover {
+  background: #3d8b5d;
+}
+
+.seat-btn.current {
+  background: #1d8046;
 }
 
 .score {
@@ -302,98 +327,6 @@ button:hover:not(:disabled) {
   align-items: center;
   gap: 12px;
   margin-top: 40px;
-}
-
-.lobby-home {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
-.lobby-panel {
-  width: min(420px, 100%);
-  background: #114029;
-  border: 1px solid #2b7c47;
-  border-radius: 10px;
-  padding: 14px 12px;
-  text-align: left;
-}
-
-.lobby-panel h2 {
-  margin: 0 0 12px;
-  font-size: 18px;
-  text-align: center;
-}
-
-.lobby-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-.lobby-field span {
-  font-size: 12px;
-  opacity: 0.9;
-}
-
-.lobby-field input,
-.lobby-field select {
-  width: 100%;
-  border: 1px solid #2b7c47;
-  border-radius: 8px;
-  background: #0b301d;
-  color: #f5f5f5;
-  padding: 8px 10px;
-  font-size: 14px;
-}
-
-.join-game-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 260px;
-  overflow-y: auto;
-  margin-bottom: 10px;
-}
-
-.join-game-item {
-  background: #0b301d;
-  border: 1px solid #2b7c47;
-  border-radius: 8px;
-  padding: 8px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-}
-
-.join-game-meta {
-  text-align: left;
-  min-width: 0;
-}
-
-.join-game-name {
-  font-weight: 600;
-  font-size: 14px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.join-game-players {
-  font-size: 12px;
-  opacity: 0.85;
-}
-
-.join-game-empty {
-  border: 1px dashed #2b7c47;
-  border-radius: 8px;
-  padding: 12px;
-  text-align: center;
-  font-size: 13px;
-  opacity: 0.85;
 }
 
 .player-select p {
