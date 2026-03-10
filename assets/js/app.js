@@ -9,6 +9,7 @@ const leaveConfirmOverlay = document.getElementById("leaveConfirm");
 const stayHereBtn = document.getElementById("stayHere");
 const leaveNowBtn = document.getElementById("leaveNow");
 const logListEl = document.getElementById("logList");
+const undoLastBtn = document.getElementById("undoLast");
 const playerNames = {1:"mourad",2:"arkan",3:"konan"};
 
 let state = {
@@ -17,13 +18,61 @@ let state = {
   winner: null,
   playerCount: 0,
   selectedBalls: new Set(),
-  foulOnlyCounts: {}
+  foulOnlyCounts: {},
+  history: []
 };
+
+function snapshotForUndo() {
+  return {
+    balls: state.balls.map((ball) => ({...ball})),
+    foulOnlyCounts: {...state.foulOnlyCounts},
+    winner: state.winner,
+    logHtml: logListEl ? logListEl.innerHTML : ""
+  };
+}
+
+function saveUndoPoint() {
+  state.history.push(snapshotForUndo());
+  if (state.history.length > 150) {
+    state.history.shift();
+  }
+  updateUndoButtonState();
+}
+
+function clearUndoHistory() {
+  state.history = [];
+  updateUndoButtonState();
+}
+
+function updateUndoButtonState() {
+  if (!undoLastBtn) return;
+  undoLastBtn.disabled = state.history.length === 0;
+}
+
+function undoLastAction() {
+  const snapshot = state.history.pop();
+  if (!snapshot) {
+    updateUndoButtonState();
+    return;
+  }
+
+  state.balls = snapshot.balls.map((ball) => ({...ball}));
+  state.foulOnlyCounts = {...snapshot.foulOnlyCounts};
+  state.winner = snapshot.winner;
+  if (logListEl) {
+    logListEl.innerHTML = snapshot.logHtml;
+  }
+  clearSelectedBalls();
+  renderPositions();
+  recalculateScores();
+  updateUndoButtonState();
+}
 
 function buildPlayers(count) {
   state.playerCount = count;
   state.scores = {};
   state.foulOnlyCounts = {};
+  clearUndoHistory();
   playersContainer.innerHTML = "";
 
   const customNamesForThree = ["mourad", "arkan", "konan"];
@@ -72,6 +121,7 @@ function attachPlayerHandlers() {
     btn.addEventListener("click", () => {
       if (state.winner) return;
       const player = Number(btn.dataset.player);
+      saveUndoPoint();
       state.foulOnlyCounts[player] = (state.foulOnlyCounts[player] || 0) + 1;
       recalculateScores();
       logEvent(`Player ${player} foul (no ball) -4`);
@@ -103,7 +153,7 @@ function attachPlayerHandlers() {
       const player = Number(zone.dataset.player);
       const type = zone.dataset.type;
       const isFoul = type === "foul";
-      applyShot(ballNumber, player, isFoul);
+      applyShots([ballNumber], player, isFoul);
       clearSelectedBalls();
     });
 
@@ -114,7 +164,7 @@ function attachPlayerHandlers() {
       const type = zone.dataset.type;
       const isFoul = type === "foul";
       const numbers = Array.from(state.selectedBalls);
-      numbers.forEach((num) => applyShot(num, player, isFoul));
+      applyShots(numbers, player, isFoul);
       clearSelectedBalls();
     });
   });
@@ -207,12 +257,66 @@ function renderPositions() {
   });
 }
 
-function applyShot(ballNumber, player, isFoul) {
+function applyShots(ballNumbers, player, isFoul) {
+  const targetType = isFoul ? "foul" : "clean";
+  const numbersToApply = ballNumbers.filter((num) => {
+    const ball = state.balls.find((b) => b.number === num);
+    if (!ball) return false;
+    return !(ball.player === player && ball.locationType === targetType);
+  });
+
+  if (numbersToApply.length === 0) return false;
+
+  if (numbersToApply.length > 1) {
+    saveUndoPoint();
+    numbersToApply.forEach((num) =>
+      applyShot(num, player, isFoul, {saveUndo: false})
+    );
+    return true;
+  }
+
+  return applyShot(numbersToApply[0], player, isFoul);
+}
+
+function moveBallsToRack(ballNumbers) {
+  const ballsToMove = ballNumbers
+    .map((num) => state.balls.find((b) => b.number === num))
+    .filter((ball) => ball && ball.locationType !== "rack");
+
+  if (ballsToMove.length === 0) return false;
+
+  saveUndoPoint();
+  ballsToMove.forEach((ball) => {
+    ball.locationType = "rack";
+    ball.player = null;
+  });
+  state.winner = null;
+  renderPositions();
+  recalculateScores();
+  logEvent(
+    ballsToMove.length > 1
+      ? `${ballsToMove.length} balls returned to rack`
+      : `Ball ${ballsToMove[0].number} returned to rack`
+  );
+  return true;
+}
+
+function applyShot(ballNumber, player, isFoul, options = {}) {
+  const {saveUndo = true} = options;
   const ball = state.balls.find((b) => b.number === ballNumber);
-  if (!ball) return;
+  if (!ball) return false;
+
+  const targetType = isFoul ? "foul" : "clean";
+  if (ball.player === player && ball.locationType === targetType) {
+    return false;
+  }
+
+  if (saveUndo) {
+    saveUndoPoint();
+  }
 
   ball.player = player;
-  ball.locationType = isFoul ? "foul" : "clean";
+  ball.locationType = targetType;
   renderPositions();
   recalculateScores();
   checkWinner();
@@ -221,6 +325,7 @@ function applyShot(ballNumber, player, isFoul) {
   } else {
     logEvent(`P${player} ${playerNames[player]} potted ball ${ballNumber} (+${ballNumber})`);
   }
+  return true;
 }
 
 function onBallClick(event) {
@@ -321,8 +426,10 @@ function checkWinner() {
 }
 
 function startNewRack() {
+  state.winner = null;
   setupBalls();
   recalculateScores();
+  clearUndoHistory();
   // balls already in triangle; no extra animation now
   if (state.playerCount > 0) {
     logEvent("New rack started");
@@ -337,7 +444,8 @@ resetGameBtn.addEventListener("click", () => {
     winner: null,
     playerCount: currentCount,
     selectedBalls: new Set(),
-    foulOnlyCounts: {}
+    foulOnlyCounts: {},
+    history: []
   };
   startNewRack();
 });
@@ -372,6 +480,11 @@ function logEvent(message) {
 }
 
 function init() {
+  if (undoLastBtn) {
+    undoLastBtn.addEventListener("click", undoLastAction);
+    updateUndoButtonState();
+  }
+
   playerSelectButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
       const count = Number(btn.dataset.count);
@@ -406,7 +519,8 @@ function init() {
         winner: null,
         playerCount: 0,
         selectedBalls: new Set(),
-        foulOnlyCounts: {}
+        foulOnlyCounts: {},
+        history: []
       };
       playersContainer.innerHTML = "";
       rackEl.innerHTML = "";
@@ -416,6 +530,7 @@ function init() {
       if (logListEl) {
         logListEl.innerHTML = "";
       }
+      updateUndoButtonState();
     });
   }
 
@@ -437,17 +552,8 @@ function init() {
       if (event.target.closest(".ball")) return;
       event.stopPropagation();
       const numbers = Array.from(state.selectedBalls);
-      numbers.forEach((num) => {
-        const ball = state.balls.find((b) => b.number === num);
-        if (ball) {
-          ball.locationType = "rack";
-          ball.player = null;
-        }
-      });
+      moveBallsToRack(numbers);
       clearSelectedBalls();
-      renderPositions();
-      recalculateScores();
-      logEvent("Ball returned to rack");
     });
 
     tableInner.addEventListener("dragover", (event) => {
@@ -468,16 +574,8 @@ function init() {
         ballNumber = Number(numberStr);
       }
       if (!ballNumber) return;
-
-      const ball = state.balls.find((b) => b.number === ballNumber);
-      if (!ball) return;
-
-      ball.locationType = "rack";
-      ball.player = null;
+      moveBallsToRack([ballNumber]);
       clearSelectedBalls();
-      renderPositions();
-      recalculateScores();
-      logEvent("Ball returned to rack");
     });
   }
 }

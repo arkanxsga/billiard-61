@@ -34,6 +34,11 @@ h1 {
   letter-spacing: 0.05em;
 }
 
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+
 button {
   cursor: pointer;
   border: none;
@@ -49,7 +54,24 @@ button.primary {
   font-weight: 600;
 }
 
-button:hover {
+button.secondary {
+  background: #275d3c;
+}
+
+button.secondary:hover:not(:disabled) {
+  background: #2f7149;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+button.secondary:disabled {
+  background: #3a4e42;
+}
+
+button:hover:not(:disabled) {
   background: #25a35a;
 }
 

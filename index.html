@@ -11,6 +11,7 @@
   <link rel="icon" type="image/svg+xml" href="./assets/icons/icon-192.svg" />
   <link rel="stylesheet" href="./assets/css/main.css" />
   <script defer src="./assets/js/no-pwa.js"></script>
+  <script type="module" src="./assets/js/firebase-init.js"></script>
   <script defer src="./assets/js/app.js"></script>
 </head>
   <body>
@@ -32,7 +33,10 @@
           ↩
         </button>
         <h1>Billiard 61</h1>
-        <button id="resetGame" class="primary">New Rack</button>
+        <div class="header-actions">
+          <button id="undoLast" class="secondary" disabled>Undo</button>
+          <button id="resetGame" class="primary">New Rack</button>
+        </div>
       </header>
 
       <div class="main-layout">
