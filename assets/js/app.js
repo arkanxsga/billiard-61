@@ -1103,6 +1103,7 @@ function startNewGame() {
   state.game.scores = createZeroMap(playerCount);
   state.game.foulOnlyCounts = createZeroMap(playerCount);
   state.game.balls = createDefaultBalls();
+  state.game.log = [];
 
   for (let i = 1; i <= playerCount; i++) {
     if (!state.game.seatAssignments[i]) {
@@ -1112,11 +1113,10 @@ function startNewGame() {
 
   updatePottedBallsForGame(state.game);
 
-  addLogEntry(`New game started by ${localProfile.name}`);
   clearUndoHistory();
   clearSelectedBalls();
   renderAll();
-  persistGameState("new_game", "New game started");
+  persistGameState("new_game", "Game reset for a new round");
 }
 
 function selectPlayerCount(count) {
