@@ -62,7 +62,6 @@ const saveNameBtn = document.getElementById("saveNameBtn");
 const createGameBtn = document.getElementById("createGameBtn");
 const joinCodeInput = document.getElementById("joinCodeInput");
 const joinGameBtn = document.getElementById("joinGameBtn");
-const roomBadge = document.getElementById("roomBadge");
 const mainContent = document.getElementById("mainContent");
 const backSelectBtn = document.getElementById("backSelect");
 const leaveConfirmOverlay = document.getElementById("leaveConfirm");
@@ -161,11 +160,6 @@ function setLobbyMessage(message, isError = false) {
   lobbyMessageEl.style.color = isError ? "#ffb3b3" : "#ffd28f";
 }
 
-function showGameMessage(message) {
-  if (!statusBar) return;
-  statusBar.textContent = message;
-}
-
 function updateRoomUi() {
   const inRoom = Boolean(currentRoomCode);
 
@@ -180,15 +174,6 @@ function updateRoomUi() {
   }
   if (roomCodeText) {
     roomCodeText.textContent = currentRoomCode || "";
-  }
-  if (roomBadge) {
-    if (inRoom) {
-      roomBadge.classList.remove("hidden");
-      roomBadge.textContent = `Room ${currentRoomCode}`;
-    } else {
-      roomBadge.classList.add("hidden");
-      roomBadge.textContent = "";
-    }
   }
 }
 
@@ -1171,7 +1156,8 @@ function closeNewGameConfirm() {
 function startNewGame() {
   if (state.game.playerCount === 0) return;
   if (!canCurrentUserStartNewGame()) {
-    showGameMessage("Only the game creator can start a new game.");
+    addLogEntry("Only the game creator can start a new game.");
+    renderAll();
     return;
   }
   openNewGameConfirm();
