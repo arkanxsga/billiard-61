@@ -557,19 +557,19 @@ button:hover:not(:disabled) {
 }
 
 .modal-btn.stay {
-  background: #1d8046;
-}
-
-.modal-btn.stay:hover {
-  background: #25a35a;
-}
-
-.modal-btn.leave {
   background: #b02222;
 }
 
-.modal-btn.leave:hover {
+.modal-btn.stay:hover {
   background: #d43737;
+}
+
+.modal-btn.leave {
+  background: #1d8046;
+}
+
+.modal-btn.leave:hover {
+  background: #25a35a;
 }
 
 @keyframes modal-pop {

@@ -100,6 +100,7 @@ let saveQueue = Promise.resolve();
 let localProfile = loadLocalProfile();
 let hasClearedStoredGames = false;
 let pendingKickTarget = null;
+let lobbyMessageTimeoutId = null;
 
 let state = {
   game: createDefaultGameState(),
@@ -178,10 +179,54 @@ function sanitizeGameName(value) {
     .slice(0, 32);
 }
 
-function setLobbyMessage(message, isError = false) {
+function setLobbyMessage(message, isError = false, options = {}) {
   if (!lobbyMessageEl) return;
-  lobbyMessageEl.textContent = message || "";
-  lobbyMessageEl.style.color = isError ? "#ffb3b3" : "#ffd28f";
+  if (lobbyMessageTimeoutId) {
+    clearTimeout(lobbyMessageTimeoutId);
+    lobbyMessageTimeoutId = null;
+  }
+
+  const safeMessage = String(message || "");
+  const safeColor =
+    typeof options.color === "string" && options.color.trim()
+      ? options.color
+      : isError
+        ? "#ffb3b3"
+        : "#ffd28f";
+  const clearAfterMs = Number(options.clearAfterMs || 0);
+
+  lobbyMessageEl.textContent = safeMessage;
+  lobbyMessageEl.style.color = safeColor;
+
+  if (safeMessage && clearAfterMs > 0) {
+    lobbyMessageTimeoutId = setTimeout(() => {
+      if (!lobbyMessageEl) return;
+      if (lobbyMessageEl.textContent !== safeMessage) return;
+      lobbyMessageEl.textContent = "";
+      lobbyMessageEl.style.color = "#ffd28f";
+      lobbyMessageTimeoutId = null;
+    }, clearAfterMs);
+  }
+}
+
+async function isNameTakenByAnotherProfile(name) {
+  const targetName = sanitizeName(name).toLowerCase();
+  if (!targetName) return false;
+
+  await ensureDatabaseReady();
+  const snapshot = await get(ref(dbInstance, PROFILES_PATH));
+  if (!snapshot.exists()) return false;
+
+  const profiles = snapshot.val() || {};
+  for (const [profileId, profileValue] of Object.entries(profiles)) {
+    if (String(profileId) === localProfile.id) continue;
+    const existingName = sanitizeName(profileValue?.name || "").toLowerCase();
+    if (existingName && existingName === targetName) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function updateRoomUi() {
@@ -1384,6 +1429,18 @@ async function saveNameFromModal() {
     return false;
   }
 
+  try {
+    const taken = await isNameTakenByAnotherProfile(name);
+    if (taken) {
+      setLobbyMessage("Name taken.", true);
+      return false;
+    }
+  } catch (error) {
+    console.error("Failed to validate username:", error);
+    setLobbyMessage("Could not verify username. Try again.", true);
+    return false;
+  }
+
   setLocalProfileName(name);
   try {
     await ensureDatabaseReady();
@@ -1396,7 +1453,10 @@ async function saveNameFromModal() {
   if (currentRoomCode) {
     syncMySeatNameIfNeeded();
   }
-  setLobbyMessage("Username saved.");
+  setLobbyMessage("Username saved.", false, {
+    color: "#ffffff",
+    clearAfterMs: 3000,
+  });
   return true;
 }
 

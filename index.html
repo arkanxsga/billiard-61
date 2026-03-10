@@ -53,6 +53,7 @@
         <div class="header-actions">
           <button id="undoLast" class="secondary" disabled>Undo</button>
           <button id="redoLast" class="secondary" disabled>Redo</button>
+          <button id="kickPlayerBtn" class="secondary" disabled>Kick</button>
           <button id="resetGame" class="primary">New Game</button>
         </div>
       </header>
@@ -135,12 +136,35 @@
       </div>
     </div>
 
+    <div id="kickPlayerModal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-title">Kick Player</div>
+        <div class="modal-subtitle">Only game creator can kick players.</div>
+        <div id="kickPlayersList" class="join-games-list"></div>
+        <div class="modal-actions">
+          <button id="closeKickPlayer" class="modal-btn stay">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="kickConfirmModal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-title">Kick Player</div>
+        <div id="kickConfirmMessage" class="modal-subtitle">Are you sure you want to kick this player?</div>
+        <div class="modal-actions">
+          <button id="confirmKickYesBtn" class="modal-btn leave">Yes</button>
+          <button id="cancelKickNoBtn" class="modal-btn stay">No</button>
+        </div>
+      </div>
+    </div>
+
     <div id="nameModal" class="modal-overlay hidden">
       <div class="modal">
         <div class="modal-title">Set username</div>
         <div class="modal-subtitle">You can change this anytime.</div>
         <input id="nameModalInput" class="text-input" type="text" maxlength="24" placeholder="Your name" />
         <div class="modal-actions">
+          <button id="cancelNameModalBtn" class="modal-btn stay">Cancel</button>
           <button id="saveNameModalBtn" class="modal-btn leave">Save Username</button>
         </div>
       </div>
