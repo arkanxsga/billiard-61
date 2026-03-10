@@ -34,8 +34,6 @@
     <div id="playerSelectOverlay" class="player-select">
       <h1>Billiard 61</h1>
       <div id="connectPanel" class="connect-panel">
-        <label class="field-label" for="nameInput">Your name</label>
-        <input id="nameInput" class="text-input" type="text" maxlength="24" placeholder="Enter your name" />
         <div class="connect-actions">
           <button id="createGameBtn" class="primary">Create Game</button>
           <button id="joinGameBtn" class="secondary">Join Game</button>
@@ -130,6 +128,17 @@
           <div id="joinGamesList" class="join-games-list"></div>
           <div class="modal-actions">
             <button id="closeJoinGame" class="modal-btn stay">Close</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="nameModal" class="modal-overlay hidden">
+        <div class="modal">
+          <div class="modal-title">Enter your name</div>
+          <div class="modal-subtitle">This is saved for next time.</div>
+          <input id="nameModalInput" class="text-input" type="text" maxlength="24" placeholder="Your name" />
+          <div class="modal-actions">
+            <button id="saveNameModalBtn" class="modal-btn leave">Save</button>
           </div>
         </div>
       </div>

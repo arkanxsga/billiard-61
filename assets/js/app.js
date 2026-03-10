@@ -52,7 +52,6 @@ const playersContainer = document.getElementById("playersContainer");
 const playerSelectOverlay = document.getElementById("playerSelectOverlay");
 const connectPanel = document.getElementById("connectPanel");
 const lobbyMessageEl = document.getElementById("lobbyMessage");
-const nameInput = document.getElementById("nameInput");
 const createGameBtn = document.getElementById("createGameBtn");
 const joinGameBtn = document.getElementById("joinGameBtn");
 const mainContent = document.getElementById("mainContent");
@@ -75,6 +74,9 @@ const confirmCreateGameBtn = document.getElementById("confirmCreateGame");
 const joinGameModal = document.getElementById("joinGameModal");
 const joinGamesListEl = document.getElementById("joinGamesList");
 const closeJoinGameBtn = document.getElementById("closeJoinGame");
+const nameModal = document.getElementById("nameModal");
+const nameModalInput = document.getElementById("nameModalInput");
+const saveNameModalBtn = document.getElementById("saveNameModalBtn");
 
 let roomRef = null;
 let dbInstance = null;
@@ -130,9 +132,7 @@ function setLocalProfileName(name) {
 }
 
 function ensureLocalProfileName() {
-  if (localProfile.name) return true;
-  if (!nameInput) return false;
-  return setLocalProfileName(nameInput.value);
+  return Boolean(localProfile.name);
 }
 
 async function syncLocalProfileToDatabase() {
@@ -171,6 +171,12 @@ function setLobbyMessage(message, isError = false) {
 function updateRoomUi() {
   if (connectPanel) {
     connectPanel.classList.remove("hidden");
+  }
+  if (createGameBtn) {
+    createGameBtn.disabled = !ensureLocalProfileName();
+  }
+  if (joinGameBtn) {
+    joinGameBtn.disabled = !ensureLocalProfileName();
   }
 }
 
@@ -1154,6 +1160,10 @@ function closeNewGameConfirm() {
 }
 
 function openCreateGameModal() {
+  if (!ensureLocalProfileName()) {
+    openNameModal();
+    return;
+  }
   if (!createGameModal) return;
   if (createGameNameInput) {
     createGameNameInput.value = "";
@@ -1172,6 +1182,35 @@ function closeCreateGameModal() {
 function closeJoinGameModal() {
   if (!joinGameModal) return;
   joinGameModal.classList.add("hidden");
+}
+
+function openNameModal() {
+  if (!nameModal) return;
+  if (nameModalInput) {
+    nameModalInput.value = localProfile.name || "";
+    setTimeout(() => nameModalInput.focus(), 0);
+  }
+  nameModal.classList.remove("hidden");
+}
+
+function closeNameModal() {
+  if (!nameModal) return;
+  nameModal.classList.add("hidden");
+}
+
+async function saveNameFromModal() {
+  const name = sanitizeName(nameModalInput?.value || "");
+  if (!name) {
+    setLobbyMessage("Enter your name first.", true);
+    return false;
+  }
+
+  setLocalProfileName(name);
+  await ensureDatabaseReady();
+  await syncLocalProfileToDatabase();
+  closeNameModal();
+  setLobbyMessage(`Welcome ${name}`);
+  return true;
 }
 
 function renderJoinGamesList(games) {
@@ -1199,6 +1238,10 @@ function renderJoinGamesList(games) {
 }
 
 async function openJoinGameModal() {
+  if (!ensureLocalProfileName()) {
+    openNameModal();
+    return;
+  }
   if (!joinGameModal) return;
   await ensureDatabaseReady();
 
@@ -1464,15 +1507,6 @@ async function joinRoomByCode(code) {
 }
 
 function attachStaticEventHandlers() {
-  if (nameInput) {
-    nameInput.value = localProfile.name || "";
-    nameInput.addEventListener("input", () => {
-      if (setLocalProfileName(nameInput.value)) {
-        syncLocalProfileToDatabase();
-      }
-    });
-  }
-
   if (createGameBtn) {
     createGameBtn.addEventListener("click", openCreateGameModal);
   }
@@ -1498,13 +1532,29 @@ function attachStaticEventHandlers() {
         setLobbyMessage("Choose a valid player count.", true);
         return;
       }
-      if (!ensureLocalProfileName()) {
-        setLobbyMessage("Enter your name first.", true);
-        return;
-      }
 
       closeCreateGameModal();
       await createRoomAndConnect(gameName, playerCount);
+    });
+  }
+
+  if (saveNameModalBtn) {
+    saveNameModalBtn.addEventListener("click", async () => {
+      const saved = await saveNameFromModal();
+      if (saved) {
+        updateRoomUi();
+      }
+    });
+  }
+
+  if (nameModalInput) {
+    nameModalInput.addEventListener("keydown", async (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      const saved = await saveNameFromModal();
+      if (saved) {
+        updateRoomUi();
+      }
     });
   }
 
@@ -1607,6 +1657,13 @@ async function init() {
   attachStaticEventHandlers();
   updateRoomUi();
   renderAll();
+
+  if (!ensureLocalProfileName()) {
+    openNameModal();
+    setLobbyMessage("Enter your name to continue.");
+  } else {
+    setLobbyMessage(`Welcome ${localProfile.name}`);
+  }
 }
 
 init();
