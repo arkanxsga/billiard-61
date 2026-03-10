@@ -1308,6 +1308,71 @@ function buildCreatedGameState(gameName, playerCount) {
   return created;
 }
 
+function buildRoomUpdateForLeavingUser() {
+  if (!roomRef || state.game.playerCount <= 0) return null;
+
+  const roomGame = normalizeGameState(state.game);
+  let changed = false;
+
+  for (let i = 1; i <= roomGame.playerCount; i++) {
+    if (roomGame.seatAssignments[i] === localProfile.id) {
+      delete roomGame.seatAssignments[i];
+      roomGame.playerNames[i] = `Player ${i}`;
+      changed = true;
+    }
+  }
+
+  if (roomGame.ownerId === localProfile.id) {
+    let replacementSeat = null;
+    for (let i = 1; i <= roomGame.playerCount; i++) {
+      if (roomGame.seatAssignments[i]) {
+        replacementSeat = i;
+        break;
+      }
+    }
+
+    if (replacementSeat) {
+      roomGame.ownerId = roomGame.seatAssignments[replacementSeat];
+      roomGame.ownerName =
+        sanitizeName(roomGame.playerNames[replacementSeat]) ||
+        `Player ${replacementSeat}`;
+      roomGame.log.unshift(
+        createLogEntry(`Leader changed to ${roomGame.ownerName}`)
+      );
+    } else {
+      roomGame.ownerId = "";
+      roomGame.ownerName = "";
+      roomGame.log.unshift(createLogEntry("Leader left the room"));
+    }
+    changed = true;
+  }
+
+  if (!changed) return null;
+
+  roomGame.log.unshift(createLogEntry(`${localProfile.name} left the room`));
+  if (roomGame.log.length > MAX_LOG_ENTRIES) {
+    roomGame.log = roomGame.log.slice(0, MAX_LOG_ENTRIES);
+  }
+
+  roomGame.lastAction = buildLastAction("leave_room", `${localProfile.name} left`);
+  roomGame.updatedAt = Date.now();
+
+  return serializeGameState(roomGame);
+}
+
+function syncLeaveToRoom() {
+  if (!roomRef) return;
+
+  const payload = buildRoomUpdateForLeavingUser();
+  if (!payload) return;
+
+  saveQueue = saveQueue
+    .then(() => update(roomRef, payload))
+    .catch((error) => {
+      console.error("Failed to sync leave state:", error);
+    });
+}
+
 function detachRoomListener() {
   if (typeof roomUnsubscribe === "function") {
     roomUnsubscribe();
@@ -1316,6 +1381,7 @@ function detachRoomListener() {
 }
 
 function leaveCurrentRoom() {
+  syncLeaveToRoom();
   detachRoomListener();
   roomRef = null;
   currentRoomCode = "";
@@ -1395,6 +1461,21 @@ function attachPlayerHandlers() {
   });
 }
 
+function claimLeadershipIfNeeded() {
+  if (!roomRef) return;
+  if (state.game.playerCount <= 0) return;
+  if (state.game.ownerId) return;
+
+  const mySeat = getCurrentUserSeat();
+  if (!mySeat) return;
+
+  state.game.ownerId = localProfile.id;
+  state.game.ownerName = localProfile.name;
+  addLogEntry(`${localProfile.name} became leader`);
+  renderAll();
+  persistGameState("claim_owner", "Leader claimed");
+}
+
 function applyRemoteState(game, isInitialRead = false) {
   const previousActionBy = game.lastAction?.by || "";
   const isOtherClient = previousActionBy && previousActionBy !== CLIENT_ID;
@@ -1408,6 +1489,7 @@ function applyRemoteState(game, isInitialRead = false) {
 
   renderAll();
   syncMySeatNameIfNeeded();
+  claimLeadershipIfNeeded();
 }
 
 async function connectToRoom(roomCode, { createIfMissing = false } = {}) {
