@@ -4,15 +4,35 @@
   <meta charset="UTF-8" />
   <title>Billiard 61</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="apple-touch-icon" sizes="512x512" href="./assets/icons/icon-512.png">
 <meta name="theme-color" content="#111111">
   <link rel="icon" type="image/svg+xml" href="./assets/icons/icon-192.svg" />
-  <link rel="stylesheet" href="./assets/css/main.css" />
-  <script defer src="./assets/js/no-pwa.js"></script>
-  <script type="module" src="./assets/js/firebase-init.js"></script>
-  <script defer src="./assets/js/app.js"></script>
+  <script>
+    (() => {
+      const bust = Date.now().toString();
+      const head = document.head;
+
+      const css = document.createElement("link");
+      css.rel = "stylesheet";
+      css.href = `./assets/css/main.css?v=${bust}`;
+      head.appendChild(css);
+
+      const firebase = document.createElement("script");
+      firebase.type = "module";
+      firebase.src = `./assets/js/firebase-init.js?v=${bust}`;
+      head.appendChild(firebase);
+
+      const app = document.createElement("script");
+      app.defer = true;
+      app.src = `./assets/js/app.js?v=${bust}`;
+      head.appendChild(app);
+    })();
+  </script>
 </head>
   <body>
   <div class="app">
