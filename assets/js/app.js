@@ -10,6 +10,8 @@ import {
   get,
   onValue,
   update,
+  remove,
+  onDisconnect,
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
 
 const firebaseConfig = {
@@ -21,7 +23,6 @@ const firebaseConfig = {
   appId: "1:353223372621:web:c40710808be8afb243d104",
 };
 
-const ROOM_PATH = "games/mainRoom";
 const MAX_LOG_ENTRIES = 80;
 const MAX_UNDO_HISTORY = 150;
 const CLIENT_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -47,7 +48,6 @@ const rackEl = document.getElementById("rack");
 const resetGameBtn = document.getElementById("resetGame");
 const playersContainer = document.getElementById("playersContainer");
 const playerSelectOverlay = document.getElementById("playerSelectOverlay");
-const playerSelectButtons = document.querySelectorAll(".player-select-option");
 const mainContent = document.getElementById("mainContent");
 const backSelectBtn = document.getElementById("backSelect");
 const leaveConfirmOverlay = document.getElementById("leaveConfirm");
@@ -58,8 +58,32 @@ const undoLastBtn = document.getElementById("undoLast");
 const statusBar = document.getElementById("statusBar");
 const offlineOverlayId = "offlineRequiredOverlay";
 
-let roomRef = null;
+const lobbyHomeEl = document.getElementById("lobbyHome");
+const createGamePanelEl = document.getElementById("createGamePanel");
+const joinGamePanelEl = document.getElementById("joinGamePanel");
+const showCreateGameBtn = document.getElementById("showCreateGame");
+const showJoinGameBtn = document.getElementById("showJoinGame");
+const createGameNameInput = document.getElementById("createGameName");
+const createGamePlayersSelect = document.getElementById("createGamePlayers");
+const createGameSubmitBtn = document.getElementById("createGameSubmit");
+const createGameBackBtn = document.getElementById("createGameBack");
+const joinGameBackBtn = document.getElementById("joinGameBack");
+const refreshJoinListBtn = document.getElementById("refreshJoinList");
+const joinGameListEl = document.getElementById("joinGameList");
+
+let db = null;
+let gamesRef = null;
+let lobbyUnsubscribe = null;
+let roomStateUnsubscribe = null;
+
+let currentRoomId = "";
+let currentRoomName = "";
+let currentRoomRef = null;
+let currentRoomStateRef = null;
+let participantRef = null;
+
 let saveQueue = Promise.resolve();
+let lobbyRooms = {};
 
 let state = {
   game: createDefaultGameState(),
@@ -114,6 +138,20 @@ function createDefaultGameState() {
     lastAction: null,
     updatedAt: Date.now(),
   };
+}
+
+function createInitialGameState(playerCount, roomName) {
+  const game = createDefaultGameState();
+  game.playerCount = playerCount;
+  game.playerNames = createPlayerNames(playerCount);
+  game.currentTurn = 1;
+  game.scores = createZeroMap(playerCount);
+  game.foulOnlyCounts = createZeroMap(playerCount);
+  recalculateScoresForGame(game);
+  updatePottedBallsForGame(game);
+  addLogEntryToGame(game, `Game "${roomName}" created`);
+  addLogEntryToGame(game, "New rack started");
+  return game;
 }
 
 function serializeGameState(game) {
@@ -353,12 +391,16 @@ function createLogEntry(message) {
   };
 }
 
-function addLogEntry(message) {
+function addLogEntryToGame(game, message) {
   if (!message) return;
-  state.game.log.unshift(createLogEntry(message));
-  if (state.game.log.length > MAX_LOG_ENTRIES) {
-    state.game.log = state.game.log.slice(0, MAX_LOG_ENTRIES);
+  game.log.unshift(createLogEntry(message));
+  if (game.log.length > MAX_LOG_ENTRIES) {
+    game.log = game.log.slice(0, MAX_LOG_ENTRIES);
   }
+}
+
+function addLogEntry(message) {
+  addLogEntryToGame(state.game, message);
 }
 
 function buildLastAction(type, message) {
@@ -585,26 +627,27 @@ function renderPositions() {
 function renderStatus() {
   if (!statusBar) return;
 
-  if (state.game.playerCount === 0) {
+  if (!currentRoomId || state.game.playerCount === 0) {
     statusBar.textContent = "";
     return;
   }
 
   if (state.game.winner) {
-    const winnerName = state.game.playerNames[state.game.winner] || `Player ${state.game.winner}`;
+    const winnerName =
+      state.game.playerNames[state.game.winner] || `Player ${state.game.winner}`;
     const winnerScore = state.game.scores[state.game.winner] ?? 0;
-    statusBar.textContent = `Winner: ${winnerName} (${winnerScore})`;
+    statusBar.textContent = `${currentRoomName}: Winner ${winnerName} (${winnerScore})`;
     return;
   }
 
-  const turnName = state.game.playerNames[state.game.currentTurn] || `Player ${state.game.currentTurn}`;
-  statusBar.textContent = `Current turn: ${turnName}`;
+  const turnName =
+    state.game.playerNames[state.game.currentTurn] ||
+    `Player ${state.game.currentTurn}`;
+  statusBar.textContent = `${currentRoomName}: Current turn ${turnName}`;
 }
 
 function renderLayoutVisibility() {
-  const hasActiveGame = state.game.playerCount > 0;
-
-  if (hasActiveGame) {
+  if (currentRoomId) {
     playerSelectOverlay.classList.add("hidden");
     mainContent.classList.remove("hidden");
     return;
@@ -618,7 +661,7 @@ function renderAll() {
   ensureCurrentTurnIsValid();
   renderLayoutVisibility();
 
-  if (state.game.playerCount > 0) {
+  if (currentRoomId && state.game.playerCount > 0) {
     buildPlayersUI();
     renderPositions();
     renderScores();
@@ -694,7 +737,9 @@ function getDropBallNumber(event) {
 }
 
 function rackCompletionMessage(previousHadRack) {
-  const anyOnRackNow = state.game.balls.some((ball) => ball.locationType === "rack");
+  const anyOnRackNow = state.game.balls.some(
+    (ball) => ball.locationType === "rack"
+  );
   if (anyOnRackNow) {
     state.game.winner = null;
     return null;
@@ -721,11 +766,13 @@ function rackCompletionMessage(previousHadRack) {
   }
 
   state.game.winner = bestPlayer;
-  return previousHadRack ? `Rack finished: Player ${bestPlayer} wins (${bestScore})` : null;
+  return previousHadRack
+    ? `Rack finished: Player ${bestPlayer} wins (${bestScore})`
+    : null;
 }
 
 function persistGameState(actionType, actionMessage) {
-  if (!roomRef) return;
+  if (!currentRoomStateRef || !currentRoomRef) return;
 
   recalculateScoresForGame(state.game);
   updatePottedBallsForGame(state.game);
@@ -735,8 +782,16 @@ function persistGameState(actionType, actionMessage) {
   state.game.updatedAt = Date.now();
 
   const payload = serializeGameState(state.game);
+  const roomMeta = { updatedAt: Date.now() };
+
   saveQueue = saveQueue
-    .then(() => update(roomRef, payload))
+    .then(async () => {
+      await update(currentRoomStateRef, payload);
+      await update(currentRoomRef, roomMeta);
+      if (participantRef) {
+        await update(participantRef, { updatedAt: Date.now() });
+      }
+    })
     .catch((error) => {
       console.error("Failed to sync game state:", error);
     });
@@ -756,7 +811,9 @@ function applyShots(ballNumbers, player, isFoul) {
 
   saveUndoPoint();
 
-  const previousHadRack = state.game.balls.some((ball) => ball.locationType === "rack");
+  const previousHadRack = state.game.balls.some(
+    (ball) => ball.locationType === "rack"
+  );
 
   numbersToApply.forEach((number) => {
     const ball = state.game.balls.find((item) => item.number === number);
@@ -873,45 +930,6 @@ function startNewRack() {
   persistGameState("new_rack", "New rack started");
 }
 
-function selectPlayerCount(count) {
-  const playerCount = normalizeCount(count);
-  if (playerCount <= 0) return;
-
-  state.game = createDefaultGameState();
-  state.game.playerCount = playerCount;
-  state.game.playerNames = createPlayerNames(playerCount);
-  state.game.currentTurn = 1;
-  state.game.scores = createZeroMap(playerCount);
-  state.game.foulOnlyCounts = createZeroMap(playerCount);
-  state.game.balls = createDefaultBalls();
-
-  recalculateScoresForGame(state.game);
-  updatePottedBallsForGame(state.game);
-
-  addLogEntry(`Players set: ${playerCount}`);
-  addLogEntry("New rack started");
-
-  clearUndoHistory();
-  clearSelectedBalls();
-  renderAll();
-  persistGameState("select_players", `Players set: ${playerCount}`);
-}
-
-function resetToPlayerSelection() {
-  state.game = createDefaultGameState();
-  addLogEntry("Game reset");
-
-  clearUndoHistory();
-  clearSelectedBalls();
-
-  if (leaveConfirmOverlay) {
-    leaveConfirmOverlay.classList.add("hidden");
-  }
-
-  renderAll();
-  persistGameState("reset_game", "Game reset");
-}
-
 function attachPlayerHandlers() {
   const foulOnlyButtons = document.querySelectorAll(".foul-only-btn");
   const dropZones = document.querySelectorAll(".drop-zone");
@@ -976,26 +994,317 @@ function applyRemoteState(game, isInitialRead = false) {
   renderAll();
 }
 
-async function initializeRealtimeRoom() {
-  const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-  const db = getDatabase(app);
-  roomRef = ref(db, ROOM_PATH);
+function normalizeRoomList(rawRooms) {
+  if (!rawRooms || typeof rawRooms !== "object") return {};
+  return rawRooms;
+}
 
-  const snapshot = await get(roomRef);
-  if (snapshot.exists()) {
-    applyRemoteState(snapshot.val(), true);
-  } else {
-    const defaultState = createDefaultGameState();
-    defaultState.lastAction = buildLastAction("init", "Initial game state created");
-    defaultState.updatedAt = Date.now();
-    await set(roomRef, serializeGameState(defaultState));
-    applyRemoteState(defaultState, true);
+function getParticipantCount(participants) {
+  if (!participants || typeof participants !== "object") return 0;
+  return Object.keys(participants).length;
+}
+
+function showLobbyView(view) {
+  const showHome = view === "home";
+  const showCreate = view === "create";
+  const showJoin = view === "join";
+
+  if (lobbyHomeEl) lobbyHomeEl.classList.toggle("hidden", !showHome);
+  if (createGamePanelEl) createGamePanelEl.classList.toggle("hidden", !showCreate);
+  if (joinGamePanelEl) joinGamePanelEl.classList.toggle("hidden", !showJoin);
+}
+
+function renderLobbyRooms() {
+  if (!joinGameListEl) return;
+  joinGameListEl.innerHTML = "";
+
+  const rooms = Object.entries(lobbyRooms)
+    .map(([id, room]) => ({ id, ...(room || {}) }))
+    .filter((room) => normalizeCount(room.maxPlayers) >= 2)
+    .sort(
+      (a, b) =>
+        Number(b.updatedAt || b.createdAt || 0) -
+        Number(a.updatedAt || a.createdAt || 0)
+    );
+
+  if (rooms.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "join-game-empty";
+    empty.textContent = "No multiplayer games yet.";
+    joinGameListEl.appendChild(empty);
+    return;
   }
 
-  onValue(roomRef, (roomSnapshot) => {
-    if (!roomSnapshot.exists()) return;
-    applyRemoteState(roomSnapshot.val(), false);
+  rooms.forEach((room) => {
+    const roomName = String(room.roomName || "Unnamed Game");
+    const maxPlayers = normalizeCount(room.maxPlayers) || 2;
+    const count = getParticipantCount(room.participants);
+    const full = count >= maxPlayers;
+
+    const row = document.createElement("div");
+    row.className = "join-game-item";
+
+    const meta = document.createElement("div");
+    meta.className = "join-game-meta";
+
+    const nameEl = document.createElement("div");
+    nameEl.className = "join-game-name";
+    nameEl.textContent = roomName;
+
+    const playersEl = document.createElement("div");
+    playersEl.className = "join-game-players";
+    playersEl.textContent = `${count}/${maxPlayers} players`;
+
+    meta.appendChild(nameEl);
+    meta.appendChild(playersEl);
+
+    const joinBtn = document.createElement("button");
+    joinBtn.className = "secondary";
+
+    if (currentRoomId === room.id) {
+      joinBtn.textContent = "Joined";
+      joinBtn.disabled = true;
+    } else if (full) {
+      joinBtn.textContent = "Full";
+      joinBtn.disabled = true;
+    } else {
+      joinBtn.textContent = "Join";
+      joinBtn.addEventListener("click", () => {
+        joinRoom(room.id);
+      });
+    }
+
+    row.appendChild(meta);
+    row.appendChild(joinBtn);
+    joinGameListEl.appendChild(row);
   });
+}
+
+function createRoomId(name) {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 20);
+
+  const safeSlug = slug || "game";
+  const suffix = Date.now().toString(36);
+  return `${safeSlug}-${suffix}`;
+}
+
+async function refreshLobbyRooms() {
+  if (!gamesRef) return;
+  const snapshot = await get(gamesRef);
+  lobbyRooms = snapshot.exists() ? normalizeRoomList(snapshot.val()) : {};
+  renderLobbyRooms();
+}
+
+async function createGameRoom() {
+  if (!db) return;
+
+  const maxPlayers = normalizeCount(createGamePlayersSelect?.value || "0");
+  if (maxPlayers < 1 || maxPlayers > 4) return;
+
+  const rawName = (createGameNameInput?.value || "").trim();
+  const roomName = rawName || `Game ${new Date().toLocaleTimeString()}`;
+  const roomId = createRoomId(roomName);
+
+  const initialState = createInitialGameState(maxPlayers, roomName);
+  const now = Date.now();
+
+  const payload = {
+    roomId,
+    roomName,
+    maxPlayers,
+    createdAt: now,
+    updatedAt: now,
+    participants: {},
+    state: serializeGameState(initialState),
+  };
+
+  await set(ref(db, `games/${roomId}`), payload);
+  await joinRoom(roomId);
+}
+
+async function registerPresence() {
+  if (!currentRoomRef || !currentRoomId || !db) return;
+
+  participantRef = ref(db, `games/${currentRoomId}/participants/${CLIENT_ID}`);
+  await set(participantRef, {
+    joinedAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+
+  const disconnectOps = onDisconnect(participantRef);
+  disconnectOps.remove();
+}
+
+async function joinRoom(roomId) {
+  if (!db || !roomId) return;
+
+  const roomRef = ref(db, `games/${roomId}`);
+  const snapshot = await get(roomRef);
+  if (!snapshot.exists()) {
+    await refreshLobbyRooms();
+    return;
+  }
+
+  const room = snapshot.val() || {};
+  const maxPlayers = normalizeCount(room.maxPlayers);
+  if (maxPlayers < 1 || maxPlayers > 4) return;
+
+  const participantCount = getParticipantCount(room.participants);
+  const alreadyJoined = !!(room.participants && room.participants[CLIENT_ID]);
+
+  if (!alreadyJoined && participantCount >= maxPlayers) {
+    alert("This game is full.");
+    return;
+  }
+
+  if (currentRoomId && currentRoomId !== roomId) {
+    await leaveCurrentRoom({ renderAfterLeave: false });
+  }
+
+  currentRoomId = roomId;
+  currentRoomName = String(room.roomName || "Game");
+  currentRoomRef = roomRef;
+  currentRoomStateRef = ref(db, `games/${roomId}/state`);
+
+  await registerPresence();
+
+  if (roomStateUnsubscribe) {
+    roomStateUnsubscribe();
+    roomStateUnsubscribe = null;
+  }
+
+  roomStateUnsubscribe = onValue(currentRoomStateRef, async (roomStateSnapshot) => {
+    if (roomStateSnapshot.exists()) {
+      applyRemoteState(roomStateSnapshot.val(), false);
+      return;
+    }
+
+    const freshState = createInitialGameState(maxPlayers, currentRoomName);
+    await set(currentRoomStateRef, serializeGameState(freshState));
+    applyRemoteState(freshState, true);
+  });
+
+  if (room.state) {
+    applyRemoteState(room.state, true);
+  } else {
+    const freshState = createInitialGameState(maxPlayers, currentRoomName);
+    await set(currentRoomStateRef, serializeGameState(freshState));
+    applyRemoteState(freshState, true);
+  }
+
+  showLobbyView("home");
+  renderAll();
+}
+
+async function leaveCurrentRoom(options = {}) {
+  const { renderAfterLeave = true } = options;
+
+  if (!currentRoomId) {
+    if (renderAfterLeave) {
+      renderAll();
+      showLobbyView("home");
+    }
+    return;
+  }
+
+  const leavingRoomId = currentRoomId;
+  const leavingRoomRef = currentRoomRef;
+  const leavingParticipantRef = participantRef;
+
+  if (roomStateUnsubscribe) {
+    roomStateUnsubscribe();
+    roomStateUnsubscribe = null;
+  }
+
+  currentRoomId = "";
+  currentRoomName = "";
+  currentRoomRef = null;
+  currentRoomStateRef = null;
+  participantRef = null;
+
+  state.game = createDefaultGameState();
+  clearSelectedBalls();
+  clearUndoHistory();
+
+  if (leavingParticipantRef) {
+    try {
+      await remove(leavingParticipantRef);
+    } catch (error) {
+      console.error("Failed to remove participant:", error);
+    }
+  }
+
+  if (leavingRoomRef) {
+    try {
+      const participantsSnap = await get(
+        ref(db, `games/${leavingRoomId}/participants`)
+      );
+      const remaining = participantsSnap.exists()
+        ? Object.keys(participantsSnap.val() || {}).length
+        : 0;
+
+      if (remaining === 0) {
+        await remove(leavingRoomRef);
+      } else {
+        await update(leavingRoomRef, { updatedAt: Date.now() });
+      }
+    } catch (error) {
+      console.error("Failed to update room after leaving:", error);
+    }
+  }
+
+  if (leaveConfirmOverlay) {
+    leaveConfirmOverlay.classList.add("hidden");
+  }
+
+  if (renderAfterLeave) {
+    renderAll();
+    showLobbyView("home");
+    await refreshLobbyRooms();
+  }
+}
+
+function attachLobbyHandlers() {
+  if (showCreateGameBtn) {
+    showCreateGameBtn.addEventListener("click", () => {
+      showLobbyView("create");
+    });
+  }
+
+  if (showJoinGameBtn) {
+    showJoinGameBtn.addEventListener("click", () => {
+      showLobbyView("join");
+      renderLobbyRooms();
+    });
+  }
+
+  if (createGameBackBtn) {
+    createGameBackBtn.addEventListener("click", () => {
+      showLobbyView("home");
+    });
+  }
+
+  if (joinGameBackBtn) {
+    joinGameBackBtn.addEventListener("click", () => {
+      showLobbyView("home");
+    });
+  }
+
+  if (refreshJoinListBtn) {
+    refreshJoinListBtn.addEventListener("click", () => {
+      refreshLobbyRooms();
+    });
+  }
+
+  if (createGameSubmitBtn) {
+    createGameSubmitBtn.addEventListener("click", () => {
+      createGameRoom();
+    });
+  }
 }
 
 function attachStaticEventHandlers() {
@@ -1008,16 +1317,11 @@ function attachStaticEventHandlers() {
     resetGameBtn.addEventListener("click", startNewRack);
   }
 
-  playerSelectButtons.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const count = Number(btn.dataset.count);
-      selectPlayerCount(count);
-    });
-  });
+  attachLobbyHandlers();
 
   if (backSelectBtn) {
     backSelectBtn.addEventListener("click", () => {
-      if (leaveConfirmOverlay) {
+      if (leaveConfirmOverlay && currentRoomId) {
         leaveConfirmOverlay.classList.remove("hidden");
       }
     });
@@ -1031,7 +1335,7 @@ function attachStaticEventHandlers() {
 
   if (leaveNowBtn) {
     leaveNowBtn.addEventListener("click", () => {
-      resetToPlayerSelection();
+      leaveCurrentRoom();
     });
   }
 
@@ -1067,6 +1371,34 @@ function attachStaticEventHandlers() {
       moveBallsToRack([ballNumber]);
     });
   }
+
+  window.addEventListener("beforeunload", () => {
+    if (participantRef) {
+      remove(participantRef);
+    }
+  });
+}
+
+function startLobbyRealtimeListener() {
+  if (!gamesRef) return;
+
+  if (lobbyUnsubscribe) {
+    lobbyUnsubscribe();
+  }
+
+  lobbyUnsubscribe = onValue(gamesRef, (snapshot) => {
+    lobbyRooms = snapshot.exists() ? normalizeRoomList(snapshot.val()) : {};
+    renderLobbyRooms();
+  });
+}
+
+async function initializeRealtime() {
+  const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+  db = getDatabase(app);
+  gamesRef = ref(db, "games");
+
+  startLobbyRealtimeListener();
+  await refreshLobbyRooms();
 }
 
 async function init() {
@@ -1074,12 +1406,14 @@ async function init() {
     return;
   }
 
+  showLobbyView("home");
   attachStaticEventHandlers();
+  renderAll();
 
   try {
-    await initializeRealtimeRoom();
+    await initializeRealtime();
   } catch (error) {
-    console.error("Failed to initialize multiplayer sync:", error);
+    console.error("Failed to initialize multiplayer lobby:", error);
     showOfflineRequiredOverlay();
   }
 }

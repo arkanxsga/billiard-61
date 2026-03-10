@@ -12,33 +12,49 @@
 <link rel="apple-touch-icon" sizes="512x512" href="./assets/icons/icon-512.png">
 <meta name="theme-color" content="#111111">
   <link rel="icon" type="image/svg+xml" href="./assets/icons/icon-192.svg" />
-  <script>
-    (() => {
-      const bust = Date.now().toString();
-      const head = document.head;
-
-      const css = document.createElement("link");
-      css.rel = "stylesheet";
-      css.href = `./assets/css/main.css?v=${bust}`;
-      head.appendChild(css);
-
-      const app = document.createElement("script");
-      app.type = "module";
-      app.src = `./assets/js/app.js?v=${bust}`;
-      head.appendChild(app);
-    })();
-  </script>
+  <link rel="stylesheet" href="./assets/css/main.css" />
+  <script type="module" src="./assets/js/app.js"></script>
 </head>
   <body>
   <div class="app">
     <div id="playerSelectOverlay" class="player-select">
-      <h1>Billiard 61</h1>
-      <p>Select how many players:</p>
-      <div class="player-select-options">
-        <button class="player-select-option" data-count="1">1 Player</button>
-        <button class="player-select-option" data-count="2">2 Players</button>
-        <button class="player-select-option" data-count="3">3 Players</button>
-        <button class="player-select-option" data-count="4">4 Players</button>
+      <div id="lobbyHome" class="lobby-home">
+        <h1>Billiard 61</h1>
+        <p>Play live multiplayer</p>
+        <div class="player-select-options">
+          <button id="showCreateGame" class="player-select-option">Create Game</button>
+          <button id="showJoinGame" class="player-select-option">Join Multiplayer</button>
+        </div>
+      </div>
+
+      <div id="createGamePanel" class="lobby-panel hidden">
+        <h2>Create Game</h2>
+        <label class="lobby-field">
+          <span>Game Name</span>
+          <input id="createGameName" type="text" maxlength="32" placeholder="Ex: friday match" />
+        </label>
+        <label class="lobby-field">
+          <span>Players (1-4)</span>
+          <select id="createGamePlayers">
+            <option value="1">1 Player</option>
+            <option value="2">2 Players</option>
+            <option value="3">3 Players</option>
+            <option value="4">4 Players</option>
+          </select>
+        </label>
+        <div class="player-select-options">
+          <button id="createGameSubmit" class="player-select-option">Create</button>
+          <button id="createGameBack" class="player-select-option secondary">Back</button>
+        </div>
+      </div>
+
+      <div id="joinGamePanel" class="lobby-panel hidden">
+        <h2>Join Multiplayer</h2>
+        <div id="joinGameList" class="join-game-list"></div>
+        <div class="player-select-options">
+          <button id="refreshJoinList" class="player-select-option secondary">Refresh</button>
+          <button id="joinGameBack" class="player-select-option secondary">Back</button>
+        </div>
       </div>
     </div>
 
@@ -80,7 +96,7 @@
       <div id="leaveConfirm" class="modal-overlay hidden">
         <div class="modal">
           <div class="modal-title">Are you sure you want to leave?</div>
-          <div class="modal-subtitle">If you leave all progress will be lost.</div>
+          <div class="modal-subtitle">You will leave this room and return to lobby.</div>
           <div class="modal-actions">
             <button id="stayHere" class="modal-btn stay">Stay</button>
             <button id="leaveNow" class="modal-btn leave">Leave</button>
