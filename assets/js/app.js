@@ -1739,7 +1739,14 @@ function attachStaticEventHandlers() {
   }
 
   if (changeNameBtn) {
-    changeNameBtn.addEventListener("click", openNameModal);
+    changeNameBtn.addEventListener("click", () => {
+      if (!nameModal) return;
+      if (!nameModal.classList.contains("hidden")) {
+        closeNameModal();
+        return;
+      }
+      openNameModal();
+    });
   }
 
   if (cancelCreateGameBtn) {
@@ -1780,6 +1787,13 @@ function attachStaticEventHandlers() {
     });
   }
 
+  if (nameModal) {
+    nameModal.addEventListener("click", (event) => {
+      if (event.target !== nameModal) return;
+      closeNameModal();
+    });
+  }
+
   if (nameModalInput) {
     nameModalInput.addEventListener("keydown", async (event) => {
       if (event.key !== "Enter") return;
@@ -1790,6 +1804,13 @@ function attachStaticEventHandlers() {
       }
     });
   }
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (!nameModal || nameModal.classList.contains("hidden")) return;
+    event.preventDefault();
+    closeNameModal();
+  });
 
   if (closeJoinGameBtn) {
     closeJoinGameBtn.addEventListener("click", closeJoinGameModal);
