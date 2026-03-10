@@ -101,45 +101,46 @@
         </div>
       </div>
 
-      <div id="createGameModal" class="modal-overlay hidden">
-        <div class="modal">
-          <div class="modal-title">Create Game</div>
-          <div class="modal-subtitle">Set game name and players.</div>
-          <label class="field-label" for="createGameNameInput">Game name</label>
-          <input id="createGameNameInput" class="text-input" type="text" maxlength="32" placeholder="e.g. lion" />
-          <label class="field-label" for="createPlayerCountSelect">Players</label>
-          <select id="createPlayerCountSelect" class="text-input">
-            <option value="1">1 Player</option>
-            <option value="2">2 Players</option>
-            <option value="3">3 Players</option>
-            <option value="4">4 Players</option>
-          </select>
-          <div class="modal-actions">
-            <button id="cancelCreateGame" class="modal-btn stay">Cancel</button>
-            <button id="confirmCreateGame" class="modal-btn leave">Create</button>
-          </div>
+    </div>
+
+    <div id="createGameModal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-title">Create Game</div>
+        <div class="modal-subtitle">Set game name and players.</div>
+        <label class="field-label" for="createGameNameInput">Game name</label>
+        <input id="createGameNameInput" class="text-input" type="text" maxlength="32" placeholder="e.g. lion" />
+        <label class="field-label" for="createPlayerCountSelect">Players</label>
+        <select id="createPlayerCountSelect" class="text-input">
+          <option value="1">1 Player</option>
+          <option value="2">2 Players</option>
+          <option value="3">3 Players</option>
+          <option value="4">4 Players</option>
+        </select>
+        <div class="modal-actions">
+          <button id="cancelCreateGame" class="modal-btn stay">Cancel</button>
+          <button id="confirmCreateGame" class="modal-btn leave">Create</button>
         </div>
       </div>
+    </div>
 
-      <div id="joinGameModal" class="modal-overlay hidden">
-        <div class="modal">
-          <div class="modal-title">Join Game</div>
-          <div class="modal-subtitle">Select a game room.</div>
-          <div id="joinGamesList" class="join-games-list"></div>
-          <div class="modal-actions">
-            <button id="closeJoinGame" class="modal-btn stay">Close</button>
-          </div>
+    <div id="joinGameModal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-title">Join Game</div>
+        <div class="modal-subtitle">Select a game room.</div>
+        <div id="joinGamesList" class="join-games-list"></div>
+        <div class="modal-actions">
+          <button id="closeJoinGame" class="modal-btn stay">Close</button>
         </div>
       </div>
+    </div>
 
-      <div id="nameModal" class="modal-overlay hidden">
-        <div class="modal">
-          <div class="modal-title">Enter your name</div>
-          <div class="modal-subtitle">This is saved for next time.</div>
-          <input id="nameModalInput" class="text-input" type="text" maxlength="24" placeholder="Your name" />
-          <div class="modal-actions">
-            <button id="saveNameModalBtn" class="modal-btn leave">Save</button>
-          </div>
+    <div id="nameModal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-title">Enter your name</div>
+        <div class="modal-subtitle">This is saved for next time.</div>
+        <input id="nameModalInput" class="text-input" type="text" maxlength="24" placeholder="Your name" />
+        <div class="modal-actions">
+          <button id="saveNameModalBtn" class="modal-btn leave">Save</button>
         </div>
       </div>
     </div>

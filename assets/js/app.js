@@ -13,12 +13,13 @@ import {
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyD-mblK3hPjo5bLDxgBjVkN-ajXhNTsxls",
-  authDomain: "billiard-61.firebaseapp.com",
-  projectId: "billiard-61",
-  storageBucket: "billiard-61.firebasestorage.app",
-  messagingSenderId: "353223372621",
-  appId: "1:353223372621:web:c40710808be8afb243d104",
+  apiKey: "AIzaSyD_lmUwm-mI8qZvJlrN4ezKmIJg6YtPQDc",
+  authDomain: "billiard-d3767.firebaseapp.com",
+  projectId: "billiard-d3767",
+  storageBucket: "billiard-d3767.firebasestorage.app",
+  messagingSenderId: "195327033998",
+  appId: "1:195327033998:web:84e2626745f6ea21183fdf",
+  measurementId: "G-WCRHC6CQFS",
 };
 
 const ROOMS_PATH = "games";
@@ -1206,8 +1207,12 @@ async function saveNameFromModal() {
   }
 
   setLocalProfileName(name);
-  await ensureDatabaseReady();
-  await syncLocalProfileToDatabase();
+  try {
+    await ensureDatabaseReady();
+    await syncLocalProfileToDatabase();
+  } catch (error) {
+    console.error("Failed to sync name to database:", error);
+  }
   closeNameModal();
   setLobbyMessage(`Welcome ${name}`);
   return true;
