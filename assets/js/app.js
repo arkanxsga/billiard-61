@@ -29,6 +29,8 @@ const PROFILE_STORAGE_KEY = "billiard61.profile";
 const LAST_ROOM_STORAGE_KEY = "billiard61.lastRoom";
 const MAX_LOG_ENTRIES = 80;
 const MAX_UNDO_HISTORY = 150;
+const GAME_DATABASE_STORAGE_DISABLED = true;
+const LOCAL_ROOM_CODE = "LOCAL";
 const CLIENT_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 const BALL_COLORS = [
   "#f7d51d",
@@ -81,6 +83,10 @@ const closeJoinGameBtn = document.getElementById("closeJoinGame");
 const kickPlayerModal = document.getElementById("kickPlayerModal");
 const kickPlayersListEl = document.getElementById("kickPlayersList");
 const closeKickPlayerBtn = document.getElementById("closeKickPlayer");
+const kickConfirmModal = document.getElementById("kickConfirmModal");
+const kickConfirmMessageEl = document.getElementById("kickConfirmMessage");
+const confirmKickYesBtn = document.getElementById("confirmKickYesBtn");
+const cancelKickNoBtn = document.getElementById("cancelKickNoBtn");
 const nameModal = document.getElementById("nameModal");
 const nameModalInput = document.getElementById("nameModalInput");
 const cancelNameModalBtn = document.getElementById("cancelNameModalBtn");
@@ -92,6 +98,8 @@ let currentRoomCode = "";
 let roomUnsubscribe = null;
 let saveQueue = Promise.resolve();
 let localProfile = loadLocalProfile();
+let hasClearedStoredGames = false;
+let pendingKickTarget = null;
 
 let state = {
   game: createDefaultGameState(),
@@ -184,7 +192,9 @@ function updateRoomUi() {
     createGameBtn.disabled = !ensureLocalProfileName();
   }
   if (joinGameBtn) {
-    joinGameBtn.disabled = !ensureLocalProfileName();
+    joinGameBtn.disabled = true;
+    joinGameBtn.title =
+      "Join Game is disabled so gameplay is not stored in the database.";
   }
 }
 
@@ -194,6 +204,18 @@ async function ensureDatabaseReady() {
   dbInstance = getDatabase(app);
   await syncLocalProfileToDatabase();
   return dbInstance;
+}
+
+async function clearStoredGamesFromDatabase() {
+  if (hasClearedStoredGames) return;
+  hasClearedStoredGames = true;
+
+  try {
+    await ensureDatabaseReady();
+    await remove(ref(dbInstance, ROOMS_PATH));
+  } catch (error) {
+    console.error("Failed to clear stored games:", error);
+  }
 }
 
 function randomRoomCode() {
@@ -984,7 +1006,7 @@ function rackCompletionMessage(previousHadRack) {
 }
 
 function persistGameState(actionType, actionMessage) {
-  if (!roomRef) return;
+  if (GAME_DATABASE_STORAGE_DISABLED || !roomRef) return;
   const roomRefForWrite = roomRef;
 
   recalculateScoresForGame(state.game);
@@ -1240,6 +1262,42 @@ function openKickPlayerModal() {
 function closeKickPlayerModal() {
   if (!kickPlayerModal) return;
   kickPlayerModal.classList.add("hidden");
+  closeKickConfirmModal();
+}
+
+function openKickConfirmModal(userId, player) {
+  if (!kickConfirmModal) return;
+  const playerIndex = Number(player);
+  if (!userId || !playerIndex) return;
+
+  const playerName = getDisplayPlayerName(playerIndex);
+  pendingKickTarget = {
+    userId: String(userId),
+    player: playerIndex,
+    name: playerName,
+  };
+
+  if (kickConfirmMessageEl) {
+    kickConfirmMessageEl.textContent = `Are you sure you want to kick ${playerName}?`;
+  }
+  kickConfirmModal.classList.remove("hidden");
+}
+
+function closeKickConfirmModal() {
+  pendingKickTarget = null;
+  if (!kickConfirmModal) return;
+  kickConfirmModal.classList.add("hidden");
+}
+
+function confirmKickFromModal() {
+  if (!pendingKickTarget) {
+    closeKickConfirmModal();
+    return;
+  }
+
+  const target = { ...pendingKickTarget };
+  closeKickConfirmModal();
+  kickPlayerFromGame(target.userId, target.player);
 }
 
 function renderKickPlayersList() {
@@ -1371,33 +1429,10 @@ async function openJoinGameModal() {
     openNameModal();
     return;
   }
-  if (!joinGameModal) return;
-  await ensureDatabaseReady();
-
-  const snapshot = await get(ref(dbInstance, ROOMS_PATH));
-  const rawGames = snapshot.exists() ? snapshot.val() : {};
-  const games = Object.entries(rawGames || {})
-    .map(([code, value]) => {
-      const game = normalizeGameState(value);
-      return {
-        code,
-        name: sanitizeGameName(game.roomName || ""),
-        playerCount: Number(game.playerCount || 0),
-        ownerId: String(game.ownerId || ""),
-        updatedAt: Number(game.updatedAt || 0),
-      };
-    })
-    .filter(
-      (game) =>
-        game.name &&
-        game.playerCount > 0 &&
-        Boolean(game.ownerId)
-    )
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, 50);
-
-  renderJoinGamesList(games);
-  joinGameModal.classList.remove("hidden");
+  setLobbyMessage(
+    "Join Game is disabled. Only usernames are saved in database.",
+    true
+  );
 }
 
 function startNewGame() {
@@ -1465,7 +1500,7 @@ function buildRoomUpdateForLeavingUser() {
 }
 
 function syncLeaveToRoom() {
-  if (!roomRef) return;
+  if (GAME_DATABASE_STORAGE_DISABLED || !roomRef) return;
   const roomRefAtLeave = roomRef;
 
   const payload = buildRoomUpdateForLeavingUser();
@@ -1621,6 +1656,13 @@ async function connectToRoom(roomCode, { createIfMissing = false } = {}) {
     setLobbyMessage("Enter your name first.", true);
     return false;
   }
+  if (GAME_DATABASE_STORAGE_DISABLED) {
+    setLobbyMessage(
+      "Online room sync is disabled. Create Game starts a local game.",
+      true
+    );
+    return false;
+  }
 
   await ensureDatabaseReady();
   const normalizedCode = normalizeRoomCode(roomCode);
@@ -1695,6 +1737,18 @@ async function connectToRoom(roomCode, { createIfMissing = false } = {}) {
   return true;
 }
 
+function startLocalGame(gameName, playerCount) {
+  const initialGame = buildCreatedGameState(gameName, playerCount);
+  state.game = normalizeGameState(initialGame);
+  detachRoomListener();
+  roomRef = null;
+  currentRoomCode = LOCAL_ROOM_CODE;
+  localStorage.removeItem(LAST_ROOM_STORAGE_KEY);
+  clearUndoHistory();
+  clearSelectedBalls();
+  renderAll();
+}
+
 async function createRoomAndConnect(gameName, playerCount) {
   if (!ensureLocalProfileName()) {
     setLobbyMessage("Enter your name first.", true);
@@ -1702,17 +1756,14 @@ async function createRoomAndConnect(gameName, playerCount) {
   }
 
   try {
-    const roomCode = await generateRoomCode();
-    const initialGame = buildCreatedGameState(gameName, playerCount);
-    await set(ref(dbInstance, `${ROOMS_PATH}/${roomCode}`), serializeGameState(initialGame));
-    await connectToRoom(roomCode, { createIfMissing: false });
-    setLobbyMessage(`Game "${gameName}" created.`);
+    startLocalGame(gameName, playerCount);
+    setLobbyMessage(`Game "${gameName}" created locally.`);
   } catch (error) {
-    console.error("Failed to create room:", error);
+    console.error("Failed to create local game:", error);
     roomRef = null;
     currentRoomCode = "";
     updateRoomUi();
-    setLobbyMessage("Could not create game. Try again.", true);
+    setLobbyMessage("Could not create local game. Try again.", true);
   }
 }
 
@@ -1807,6 +1858,11 @@ function attachStaticEventHandlers() {
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
+    if (kickConfirmModal && !kickConfirmModal.classList.contains("hidden")) {
+      event.preventDefault();
+      closeKickConfirmModal();
+      return;
+    }
     if (!nameModal || nameModal.classList.contains("hidden")) return;
     event.preventDefault();
     closeNameModal();
@@ -1831,7 +1887,22 @@ function attachStaticEventHandlers() {
       const userId = String(button.dataset.userId || "");
       const player = Number(button.dataset.player || 0);
       if (!userId || !player) return;
-      kickPlayerFromGame(userId, player);
+      openKickConfirmModal(userId, player);
+    });
+  }
+
+  if (confirmKickYesBtn) {
+    confirmKickYesBtn.addEventListener("click", confirmKickFromModal);
+  }
+
+  if (cancelKickNoBtn) {
+    cancelKickNoBtn.addEventListener("click", closeKickConfirmModal);
+  }
+
+  if (kickConfirmModal) {
+    kickConfirmModal.addEventListener("click", (event) => {
+      if (event.target !== kickConfirmModal) return;
+      closeKickConfirmModal();
     });
   }
 
@@ -1930,6 +2001,7 @@ async function init() {
   attachStaticEventHandlers();
   updateRoomUi();
   renderAll();
+  void clearStoredGamesFromDatabase();
 
   if (!ensureLocalProfileName()) {
     openNameModal();
