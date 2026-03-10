@@ -37,29 +37,12 @@
         <label class="field-label" for="nameInput">Your name</label>
         <input id="nameInput" class="text-input" type="text" maxlength="24" placeholder="Enter your name" />
         <div class="connect-actions">
-          <button id="saveNameBtn" class="secondary">Save Name</button>
           <button id="createGameBtn" class="primary">Create Game</button>
-        </div>
-        <div class="join-row">
-          <input id="joinCodeInput" class="text-input code-input" type="text" maxlength="6" placeholder="Game code" />
           <button id="joinGameBtn" class="secondary">Join Game</button>
         </div>
       </div>
 
-      <div id="roomSetupPanel" class="hidden">
-        <p class="room-code-label">Room Code: <span id="roomCodeText"></span></p>
-        <p>Select how many players:</p>
-        <button id="leaveLobbyRoom" class="secondary">Leave Room</button>
-      </div>
-
       <div id="lobbyMessage" class="lobby-message"></div>
-
-      <div id="playerCountOptions" class="player-select-options hidden">
-        <button class="player-select-option" data-count="1">1 Player</button>
-        <button class="player-select-option" data-count="2">2 Players</button>
-        <button class="player-select-option" data-count="3">3 Players</button>
-        <button class="player-select-option" data-count="4">4 Players</button>
-      </div>
     </div>
 
     <div id="mainContent" class="hidden">
@@ -116,6 +99,37 @@
           <div class="modal-actions">
             <button id="cancelNewGame" class="modal-btn stay">Cancel</button>
             <button id="confirmNewGame" class="modal-btn leave">New Game</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="createGameModal" class="modal-overlay hidden">
+        <div class="modal">
+          <div class="modal-title">Create Game</div>
+          <div class="modal-subtitle">Set game name and players.</div>
+          <label class="field-label" for="createGameNameInput">Game name</label>
+          <input id="createGameNameInput" class="text-input" type="text" maxlength="32" placeholder="e.g. lion" />
+          <label class="field-label" for="createPlayerCountSelect">Players</label>
+          <select id="createPlayerCountSelect" class="text-input">
+            <option value="1">1 Player</option>
+            <option value="2">2 Players</option>
+            <option value="3">3 Players</option>
+            <option value="4">4 Players</option>
+          </select>
+          <div class="modal-actions">
+            <button id="cancelCreateGame" class="modal-btn stay">Cancel</button>
+            <button id="confirmCreateGame" class="modal-btn leave">Create</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="joinGameModal" class="modal-overlay hidden">
+        <div class="modal">
+          <div class="modal-title">Join Game</div>
+          <div class="modal-subtitle">Select a game room.</div>
+          <div id="joinGamesList" class="join-games-list"></div>
+          <div class="modal-actions">
+            <button id="closeJoinGame" class="modal-btn stay">Close</button>
           </div>
         </div>
       </div>

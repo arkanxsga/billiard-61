@@ -50,17 +50,10 @@ const rackEl = document.getElementById("rack");
 const resetGameBtn = document.getElementById("resetGame");
 const playersContainer = document.getElementById("playersContainer");
 const playerSelectOverlay = document.getElementById("playerSelectOverlay");
-const playerSelectButtons = document.querySelectorAll(".player-select-option");
-const playerCountOptions = document.getElementById("playerCountOptions");
 const connectPanel = document.getElementById("connectPanel");
-const roomSetupPanel = document.getElementById("roomSetupPanel");
-const roomCodeText = document.getElementById("roomCodeText");
-const leaveLobbyRoomBtn = document.getElementById("leaveLobbyRoom");
 const lobbyMessageEl = document.getElementById("lobbyMessage");
 const nameInput = document.getElementById("nameInput");
-const saveNameBtn = document.getElementById("saveNameBtn");
 const createGameBtn = document.getElementById("createGameBtn");
-const joinCodeInput = document.getElementById("joinCodeInput");
 const joinGameBtn = document.getElementById("joinGameBtn");
 const mainContent = document.getElementById("mainContent");
 const backSelectBtn = document.getElementById("backSelect");
@@ -74,6 +67,14 @@ const statusBar = document.getElementById("statusBar");
 const newGameConfirmOverlay = document.getElementById("newGameConfirm");
 const cancelNewGameBtn = document.getElementById("cancelNewGame");
 const confirmNewGameBtn = document.getElementById("confirmNewGame");
+const createGameModal = document.getElementById("createGameModal");
+const createGameNameInput = document.getElementById("createGameNameInput");
+const createPlayerCountSelect = document.getElementById("createPlayerCountSelect");
+const cancelCreateGameBtn = document.getElementById("cancelCreateGame");
+const confirmCreateGameBtn = document.getElementById("confirmCreateGame");
+const joinGameModal = document.getElementById("joinGameModal");
+const joinGamesListEl = document.getElementById("joinGamesList");
+const closeJoinGameBtn = document.getElementById("closeJoinGame");
 
 let roomRef = null;
 let dbInstance = null;
@@ -154,6 +155,13 @@ function normalizeRoomCode(value) {
     .slice(0, 6);
 }
 
+function sanitizeGameName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 32);
+}
+
 function setLobbyMessage(message, isError = false) {
   if (!lobbyMessageEl) return;
   lobbyMessageEl.textContent = message || "";
@@ -161,19 +169,8 @@ function setLobbyMessage(message, isError = false) {
 }
 
 function updateRoomUi() {
-  const inRoom = Boolean(currentRoomCode);
-
   if (connectPanel) {
-    connectPanel.classList.toggle("hidden", inRoom);
-  }
-  if (roomSetupPanel) {
-    roomSetupPanel.classList.toggle("hidden", !inRoom);
-  }
-  if (playerCountOptions) {
-    playerCountOptions.classList.toggle("hidden", !inRoom);
-  }
-  if (roomCodeText) {
-    roomCodeText.textContent = currentRoomCode || "";
+    connectPanel.classList.remove("hidden");
   }
 }
 
@@ -238,6 +235,7 @@ function createPlayerNames(count) {
 
 function createDefaultGameState() {
   return {
+    roomName: "",
     playerCount: 0,
     playerNames: {},
     seatAssignments: {},
@@ -257,6 +255,7 @@ function createDefaultGameState() {
 
 function serializeGameState(game) {
   return {
+    roomName: game.roomName || "",
     playerCount: game.playerCount,
     playerNames: { ...game.playerNames },
     seatAssignments: { ...(game.seatAssignments || {}) },
@@ -315,6 +314,7 @@ function normalizeGameState(raw) {
   }
 
   const playerCount = normalizeCount(raw.playerCount);
+  normalized.roomName = sanitizeGameName(raw.roomName || "");
   normalized.playerCount = playerCount;
   normalized.playerNames = createPlayerNames(playerCount);
   normalized.ownerId =
@@ -785,9 +785,7 @@ function renderStatus() {
   if (!statusBar) return;
 
   if (state.game.playerCount === 0) {
-    statusBar.textContent = currentRoomCode
-      ? `Room ${currentRoomCode}: choose number of players`
-      : "";
+    statusBar.textContent = "";
     return;
   }
 
@@ -1111,6 +1109,7 @@ function syncMySeatNameIfNeeded() {
 function performNewGameReset() {
   if (state.game.playerCount === 0) return;
 
+  const roomName = state.game.roomName || "";
   const playerCount = state.game.playerCount;
   const playerNames = { ...state.game.playerNames };
   const seatAssignments = { ...(state.game.seatAssignments || {}) };
@@ -1118,6 +1117,7 @@ function performNewGameReset() {
   const ownerName = state.game.ownerName || localProfile.name;
 
   state.game = createDefaultGameState();
+  state.game.roomName = roomName;
   state.game.playerCount = playerCount;
   state.game.playerNames = playerNames;
   state.game.seatAssignments = seatAssignments;
@@ -1153,6 +1153,75 @@ function closeNewGameConfirm() {
   newGameConfirmOverlay.classList.add("hidden");
 }
 
+function openCreateGameModal() {
+  if (!createGameModal) return;
+  if (createGameNameInput) {
+    createGameNameInput.value = "";
+  }
+  if (createPlayerCountSelect) {
+    createPlayerCountSelect.value = "2";
+  }
+  createGameModal.classList.remove("hidden");
+}
+
+function closeCreateGameModal() {
+  if (!createGameModal) return;
+  createGameModal.classList.add("hidden");
+}
+
+function closeJoinGameModal() {
+  if (!joinGameModal) return;
+  joinGameModal.classList.add("hidden");
+}
+
+function renderJoinGamesList(games) {
+  if (!joinGamesListEl) return;
+  joinGamesListEl.innerHTML = "";
+
+  if (games.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "modal-subtitle";
+    empty.textContent = "No active games found.";
+    joinGamesListEl.appendChild(empty);
+    return;
+  }
+
+  games.forEach((game) => {
+    const button = document.createElement("button");
+    button.className = "join-game-item";
+    button.dataset.code = game.code;
+    button.innerHTML = `
+      <div class="join-game-item-name">${escapeHtml(game.name)}</div>
+      <div class="join-game-item-meta">${game.playerCount} players • code ${game.code}</div>
+    `;
+    joinGamesListEl.appendChild(button);
+  });
+}
+
+async function openJoinGameModal() {
+  if (!joinGameModal) return;
+  await ensureDatabaseReady();
+
+  const snapshot = await get(ref(dbInstance, ROOMS_PATH));
+  const rawGames = snapshot.exists() ? snapshot.val() : {};
+  const games = Object.entries(rawGames || {})
+    .map(([code, value]) => {
+      const game = normalizeGameState(value);
+      return {
+        code,
+        name: sanitizeGameName(game.roomName || ""),
+        playerCount: Number(game.playerCount || 0),
+        updatedAt: Number(game.updatedAt || 0),
+      };
+    })
+    .filter((game) => game.name && game.playerCount > 0)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 50);
+
+  renderJoinGamesList(games);
+  joinGameModal.classList.remove("hidden");
+}
+
 function startNewGame() {
   if (state.game.playerCount === 0) return;
   if (!canCurrentUserStartNewGame()) {
@@ -1163,38 +1232,27 @@ function startNewGame() {
   openNewGameConfirm();
 }
 
-function selectPlayerCount(count) {
-  const playerCount = normalizeCount(count);
-  if (playerCount <= 0 || !currentRoomCode) return;
-  if (state.game.ownerId && state.game.ownerId !== localProfile.id) {
-    setLobbyMessage("Only the game creator can choose player count.", true);
-    return;
-  }
-  const existingOwnerId = state.game.ownerId;
-  const existingOwnerName = state.game.ownerName;
-
-  state.game = createDefaultGameState();
-  state.game.playerCount = playerCount;
-  state.game.playerNames = createPlayerNames(playerCount);
-  state.game.seatAssignments = {};
-  state.game.ownerId = existingOwnerId || localProfile.id;
-  state.game.ownerName = existingOwnerName || localProfile.name;
-  state.game.currentTurn = 1;
-  state.game.scores = createZeroMap(playerCount);
-  state.game.foulOnlyCounts = createZeroMap(playerCount);
-  state.game.balls = createDefaultBalls();
-
-  recalculateScoresForGame(state.game);
-  updatePottedBallsForGame(state.game);
-
-  addLogEntry(`Players set: ${playerCount}`);
-  addLogEntry(`Game created by ${localProfile.name}`);
-
-  clearUndoHistory();
-  clearSelectedBalls();
-  setLobbyMessage("");
-  renderAll();
-  persistGameState("select_players", `Players set: ${playerCount}`);
+function buildCreatedGameState(gameName, playerCount) {
+  const created = createDefaultGameState();
+  created.roomName = gameName;
+  created.playerCount = playerCount;
+  created.playerNames = createPlayerNames(playerCount);
+  created.seatAssignments = {};
+  created.ownerId = localProfile.id;
+  created.ownerName = localProfile.name;
+  created.currentTurn = 1;
+  created.scores = createZeroMap(playerCount);
+  created.foulOnlyCounts = createZeroMap(playerCount);
+  created.balls = createDefaultBalls();
+  recalculateScoresForGame(created);
+  updatePottedBallsForGame(created);
+  created.log = [
+    createLogEntry(`Game created by ${localProfile.name}`),
+    createLogEntry(`Players set: ${playerCount}`),
+  ];
+  created.lastAction = buildLastAction("create_game", `Game ${gameName} created`);
+  created.updatedAt = Date.now();
+  return created;
 }
 
 function detachRoomListener() {
@@ -1357,7 +1415,10 @@ async function connectToRoom(roomCode, { createIfMissing = false } = {}) {
     applyRemoteState(loadedState, true);
   }
 
-  setLobbyMessage(`Connected to room ${currentRoomCode}`);
+  const joinedName = sanitizeGameName(state.game.roomName || "");
+  setLobbyMessage(
+    joinedName ? `Joined "${joinedName}"` : `Connected to room ${currentRoomCode}`
+  );
   updateRoomUi();
 
   roomUnsubscribe = onValue(roomRef, (roomSnapshot) => {
@@ -1368,7 +1429,7 @@ async function connectToRoom(roomCode, { createIfMissing = false } = {}) {
   return true;
 }
 
-async function createRoomAndConnect() {
+async function createRoomAndConnect(gameName, playerCount) {
   if (!ensureLocalProfileName()) {
     setLobbyMessage("Enter your name first.", true);
     return;
@@ -1376,7 +1437,10 @@ async function createRoomAndConnect() {
 
   try {
     const roomCode = await generateRoomCode();
-    await connectToRoom(roomCode, { createIfMissing: true });
+    const initialGame = buildCreatedGameState(gameName, playerCount);
+    await set(ref(dbInstance, `${ROOMS_PATH}/${roomCode}`), serializeGameState(initialGame));
+    await connectToRoom(roomCode, { createIfMissing: false });
+    setLobbyMessage(`Game "${gameName}" created.`);
   } catch (error) {
     console.error("Failed to create room:", error);
     roomRef = null;
@@ -1386,14 +1450,10 @@ async function createRoomAndConnect() {
   }
 }
 
-async function joinRoomFromInput() {
-  const code = normalizeRoomCode(joinCodeInput?.value || "");
-  if (joinCodeInput) {
-    joinCodeInput.value = code;
-  }
-
+async function joinRoomByCode(code) {
   try {
     await connectToRoom(code, { createIfMissing: false });
+    closeJoinGameModal();
   } catch (error) {
     console.error("Failed to join room:", error);
     roomRef = null;
@@ -1413,39 +1473,54 @@ function attachStaticEventHandlers() {
     });
   }
 
-  if (leaveLobbyRoomBtn) {
-    leaveLobbyRoomBtn.addEventListener("click", leaveCurrentRoom);
-  }
-
-  if (saveNameBtn) {
-    saveNameBtn.addEventListener("click", async () => {
-      if (!setLocalProfileName(nameInput?.value || "")) {
-        setLobbyMessage("Enter a valid name.", true);
-        return;
-      }
-      await ensureDatabaseReady();
-      await syncLocalProfileToDatabase();
-      setLobbyMessage("Name saved.");
-    });
-  }
-
   if (createGameBtn) {
-    createGameBtn.addEventListener("click", createRoomAndConnect);
+    createGameBtn.addEventListener("click", openCreateGameModal);
   }
 
   if (joinGameBtn) {
-    joinGameBtn.addEventListener("click", joinRoomFromInput);
+    joinGameBtn.addEventListener("click", openJoinGameModal);
   }
 
-  if (joinCodeInput) {
-    joinCodeInput.addEventListener("input", () => {
-      joinCodeInput.value = normalizeRoomCode(joinCodeInput.value);
-    });
-    joinCodeInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        joinRoomFromInput();
+  if (cancelCreateGameBtn) {
+    cancelCreateGameBtn.addEventListener("click", closeCreateGameModal);
+  }
+
+  if (confirmCreateGameBtn) {
+    confirmCreateGameBtn.addEventListener("click", async () => {
+      const gameName = sanitizeGameName(createGameNameInput?.value || "");
+      const playerCount = normalizeCount(createPlayerCountSelect?.value || 0);
+
+      if (!gameName) {
+        setLobbyMessage("Enter a game name.", true);
+        return;
       }
+      if (playerCount <= 0) {
+        setLobbyMessage("Choose a valid player count.", true);
+        return;
+      }
+      if (!ensureLocalProfileName()) {
+        setLobbyMessage("Enter your name first.", true);
+        return;
+      }
+
+      closeCreateGameModal();
+      await createRoomAndConnect(gameName, playerCount);
+    });
+  }
+
+  if (closeJoinGameBtn) {
+    closeJoinGameBtn.addEventListener("click", closeJoinGameModal);
+  }
+
+  if (joinGamesListEl) {
+    joinGamesListEl.addEventListener("click", (event) => {
+      const button = event.target.closest(".join-game-item");
+      if (!button) return;
+      const roomCode = normalizeRoomCode(button.dataset.code || "");
+      if (!roomCode) {
+        return;
+      }
+      joinRoomByCode(roomCode);
     });
   }
 
@@ -1473,13 +1548,6 @@ function attachStaticEventHandlers() {
       performNewGameReset();
     });
   }
-
-  playerSelectButtons.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const count = Number(btn.dataset.count);
-      selectPlayerCount(count);
-    });
-  });
 
   if (backSelectBtn) {
     backSelectBtn.addEventListener("click", () => {
@@ -1539,16 +1607,6 @@ async function init() {
   attachStaticEventHandlers();
   updateRoomUi();
   renderAll();
-
-  const lastRoom = normalizeRoomCode(
-    localStorage.getItem(LAST_ROOM_STORAGE_KEY) || ""
-  );
-  if (lastRoom.length === 6) {
-    if (joinCodeInput) {
-      joinCodeInput.value = lastRoom;
-    }
-    setLobbyMessage(`Last room found (${lastRoom}). Tap Join Game.`);
-  }
 }
 
 init();
