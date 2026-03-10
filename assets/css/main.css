@@ -34,6 +34,17 @@ h1 {
   letter-spacing: 0.05em;
 }
 
+.title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.room-badge {
+  font-size: 12px;
+  color: #b7dbc6;
+}
+
 .header-actions {
   display: flex;
   gap: 8px;
@@ -312,7 +323,10 @@ button:hover:not(:disabled) {
 }
 
 .status {
-  display: none;
+  display: block;
+  margin-top: 10px;
+  font-size: 13px;
+  color: #d4eee0;
 }
 
 .winner {
@@ -327,6 +341,66 @@ button:hover:not(:disabled) {
   align-items: center;
   gap: 12px;
   margin-top: 40px;
+}
+
+.connect-panel {
+  width: 100%;
+  max-width: 360px;
+  background: #102b1c;
+  border: 1px solid #2b7c47;
+  border-radius: 10px;
+  padding: 12px;
+  text-align: left;
+}
+
+.field-label {
+  display: block;
+  font-size: 12px;
+  color: #b7dbc6;
+  margin-bottom: 6px;
+}
+
+.text-input {
+  width: 100%;
+  border: 1px solid #2b7c47;
+  background: #082112;
+  color: #f5f5f5;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.text-input:focus {
+  outline: none;
+  border-color: #7cff90;
+  box-shadow: 0 0 0 2px rgba(124, 255, 144, 0.2);
+}
+
+.connect-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+
+.join-row {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+
+.code-input {
+  text-transform: uppercase;
+}
+
+.room-code-label {
+  font-size: 14px;
+  margin: 0;
+}
+
+.lobby-message {
+  min-height: 18px;
+  font-size: 12px;
+  color: #ffd28f;
 }
 
 .player-select p {
@@ -519,6 +593,11 @@ button:hover:not(:disabled) {
   .players {
     gap: 10px;
     margin-bottom: 12px;
+  }
+
+  .connect-actions,
+  .join-row {
+    flex-direction: column;
   }
 
   .player {

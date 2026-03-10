@@ -21,9 +21,10 @@ const firebaseConfig = {
   appId: "1:353223372621:web:c40710808be8afb243d104",
 };
 
-const ROOM_PATH = "games/mainRoom";
+const ROOMS_PATH = "games";
 const PROFILES_PATH = "profiles";
 const PROFILE_STORAGE_KEY = "billiard61.profile";
+const LAST_ROOM_STORAGE_KEY = "billiard61.lastRoom";
 const MAX_LOG_ENTRIES = 80;
 const MAX_UNDO_HISTORY = 150;
 const CLIENT_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -50,6 +51,18 @@ const resetGameBtn = document.getElementById("resetGame");
 const playersContainer = document.getElementById("playersContainer");
 const playerSelectOverlay = document.getElementById("playerSelectOverlay");
 const playerSelectButtons = document.querySelectorAll(".player-select-option");
+const playerCountOptions = document.getElementById("playerCountOptions");
+const connectPanel = document.getElementById("connectPanel");
+const roomSetupPanel = document.getElementById("roomSetupPanel");
+const roomCodeText = document.getElementById("roomCodeText");
+const leaveLobbyRoomBtn = document.getElementById("leaveLobbyRoom");
+const lobbyMessageEl = document.getElementById("lobbyMessage");
+const nameInput = document.getElementById("nameInput");
+const saveNameBtn = document.getElementById("saveNameBtn");
+const createGameBtn = document.getElementById("createGameBtn");
+const joinCodeInput = document.getElementById("joinCodeInput");
+const joinGameBtn = document.getElementById("joinGameBtn");
+const roomBadge = document.getElementById("roomBadge");
 const mainContent = document.getElementById("mainContent");
 const backSelectBtn = document.getElementById("backSelect");
 const leaveConfirmOverlay = document.getElementById("leaveConfirm");
@@ -59,10 +72,14 @@ const logListEl = document.getElementById("logList");
 const undoLastBtn = document.getElementById("undoLast");
 const redoLastBtn = document.getElementById("redoLast");
 const statusBar = document.getElementById("statusBar");
-const offlineOverlayId = "offlineRequiredOverlay";
+const newGameConfirmOverlay = document.getElementById("newGameConfirm");
+const cancelNewGameBtn = document.getElementById("cancelNewGame");
+const confirmNewGameBtn = document.getElementById("confirmNewGame");
 
 let roomRef = null;
 let dbInstance = null;
+let currentRoomCode = "";
+let roomUnsubscribe = null;
 let saveQueue = Promise.resolve();
 let localProfile = loadLocalProfile();
 
@@ -104,15 +121,18 @@ function saveLocalProfile() {
   localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(localProfile));
 }
 
-function ensureLocalProfileName() {
-  if (localProfile.name) return;
-
-  const enteredName = sanitizeName(
-    window.prompt("Enter your name:", localProfile.name || "") || ""
-  );
-  const fallbackName = `Player-${localProfile.id.slice(-4)}`;
-  localProfile.name = enteredName || fallbackName;
+function setLocalProfileName(name) {
+  const safeName = sanitizeName(name);
+  if (!safeName) return false;
+  localProfile.name = safeName;
   saveLocalProfile();
+  return true;
+}
+
+function ensureLocalProfileName() {
+  if (localProfile.name) return true;
+  if (!nameInput) return false;
+  return setLocalProfileName(nameInput.value);
 }
 
 async function syncLocalProfileToDatabase() {
@@ -126,6 +146,80 @@ async function syncLocalProfileToDatabase() {
   } catch (error) {
     console.error("Failed to sync local profile:", error);
   }
+}
+
+function normalizeRoomCode(value) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 6);
+}
+
+function setLobbyMessage(message, isError = false) {
+  if (!lobbyMessageEl) return;
+  lobbyMessageEl.textContent = message || "";
+  lobbyMessageEl.style.color = isError ? "#ffb3b3" : "#ffd28f";
+}
+
+function showGameMessage(message) {
+  if (!statusBar) return;
+  statusBar.textContent = message;
+}
+
+function updateRoomUi() {
+  const inRoom = Boolean(currentRoomCode);
+
+  if (connectPanel) {
+    connectPanel.classList.toggle("hidden", inRoom);
+  }
+  if (roomSetupPanel) {
+    roomSetupPanel.classList.toggle("hidden", !inRoom);
+  }
+  if (playerCountOptions) {
+    playerCountOptions.classList.toggle("hidden", !inRoom);
+  }
+  if (roomCodeText) {
+    roomCodeText.textContent = currentRoomCode || "";
+  }
+  if (roomBadge) {
+    if (inRoom) {
+      roomBadge.classList.remove("hidden");
+      roomBadge.textContent = `Room ${currentRoomCode}`;
+    } else {
+      roomBadge.classList.add("hidden");
+      roomBadge.textContent = "";
+    }
+  }
+}
+
+async function ensureDatabaseReady() {
+  if (dbInstance) return dbInstance;
+  const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+  dbInstance = getDatabase(app);
+  await syncLocalProfileToDatabase();
+  return dbInstance;
+}
+
+function randomRoomCode() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+  for (let i = 0; i < 6; i++) {
+    const idx = Math.floor(Math.random() * chars.length);
+    code += chars[idx];
+  }
+  return code;
+}
+
+async function generateRoomCode() {
+  await ensureDatabaseReady();
+  for (let i = 0; i < 24; i++) {
+    const candidate = randomRoomCode();
+    const snapshot = await get(ref(dbInstance, `${ROOMS_PATH}/${candidate}`));
+    if (!snapshot.exists()) {
+      return candidate;
+    }
+  }
+  throw new Error("Could not generate room code");
 }
 
 function createDefaultBalls() {
@@ -436,7 +530,7 @@ function getCurrentUserSeat() {
 }
 
 function canCurrentUserStartNewGame() {
-  if (state.game.playerCount === 0) return false;
+  if (state.game.playerCount === 0 || !currentRoomCode) return false;
   return Boolean(state.game.ownerId && state.game.ownerId === localProfile.id);
 }
 
@@ -605,58 +699,6 @@ function renderLog() {
   });
 }
 
-function showOfflineRequiredOverlay() {
-  let overlay = document.getElementById(offlineOverlayId);
-  if (!overlay) {
-    overlay = document.createElement("div");
-    overlay.id = offlineOverlayId;
-    overlay.style.cssText = [
-      "position:fixed",
-      "inset:0",
-      "z-index:9999",
-      "display:flex",
-      "align-items:center",
-      "justify-content:center",
-      "background:#04160d",
-      "color:#f5f5f5",
-      "padding:20px",
-      "text-align:center",
-    ].join(";");
-    overlay.innerHTML = `
-      <div style="max-width:320px">
-        <h2 style="margin:0 0 10px;font-size:22px;">Internet Required</h2>
-        <p style="margin:0;opacity:.9;">This app works only online. Reconnect to continue.</p>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-  }
-  overlay.style.display = "flex";
-}
-
-function hideOfflineRequiredOverlay() {
-  const overlay = document.getElementById(offlineOverlayId);
-  if (overlay) overlay.style.display = "none";
-}
-
-function enforceOnlineOnlyMode() {
-  const applyConnectivityState = () => {
-    if (navigator.onLine) {
-      hideOfflineRequiredOverlay();
-      return true;
-    }
-    showOfflineRequiredOverlay();
-    return false;
-  };
-
-  window.addEventListener("offline", applyConnectivityState);
-  window.addEventListener("online", () => {
-    hideOfflineRequiredOverlay();
-    window.location.reload();
-  });
-
-  return applyConnectivityState();
-}
-
 function createBallElement(ball) {
   const div = document.createElement("div");
   div.className = "ball available in-rack";
@@ -758,7 +800,9 @@ function renderStatus() {
   if (!statusBar) return;
 
   if (state.game.playerCount === 0) {
-    statusBar.textContent = "";
+    statusBar.textContent = currentRoomCode
+      ? `Room ${currentRoomCode}: choose number of players`
+      : "";
     return;
   }
 
@@ -774,7 +818,7 @@ function renderStatus() {
 }
 
 function renderLayoutVisibility() {
-  const hasActiveGame = state.game.playerCount > 0;
+  const hasActiveGame = state.game.playerCount > 0 && Boolean(currentRoomCode);
 
   if (hasActiveGame) {
     playerSelectOverlay.classList.add("hidden");
@@ -784,10 +828,12 @@ function renderLayoutVisibility() {
 
   mainContent.classList.add("hidden");
   playerSelectOverlay.classList.remove("hidden");
+  updateRoomUi();
 }
 
 function renderAll() {
   ensureCurrentTurnIsValid();
+  updateRoomUi();
   renderLayoutVisibility();
 
   if (state.game.playerCount > 0) {
@@ -1077,15 +1123,8 @@ function syncMySeatNameIfNeeded() {
   persistGameState("sync_name", "Seat name synced");
 }
 
-function startNewGame() {
+function performNewGameReset() {
   if (state.game.playerCount === 0) return;
-  if (!canCurrentUserStartNewGame()) {
-    window.alert("Only the game creator can start a new game.");
-    return;
-  }
-  if (!window.confirm("Are you sure you want to start a new game?")) {
-    return;
-  }
 
   const playerCount = state.game.playerCount;
   const playerNames = { ...state.game.playerNames };
@@ -1119,16 +1158,41 @@ function startNewGame() {
   persistGameState("new_game", "Game reset for a new round");
 }
 
+function openNewGameConfirm() {
+  if (!newGameConfirmOverlay) return;
+  newGameConfirmOverlay.classList.remove("hidden");
+}
+
+function closeNewGameConfirm() {
+  if (!newGameConfirmOverlay) return;
+  newGameConfirmOverlay.classList.add("hidden");
+}
+
+function startNewGame() {
+  if (state.game.playerCount === 0) return;
+  if (!canCurrentUserStartNewGame()) {
+    showGameMessage("Only the game creator can start a new game.");
+    return;
+  }
+  openNewGameConfirm();
+}
+
 function selectPlayerCount(count) {
   const playerCount = normalizeCount(count);
-  if (playerCount <= 0) return;
+  if (playerCount <= 0 || !currentRoomCode) return;
+  if (state.game.ownerId && state.game.ownerId !== localProfile.id) {
+    setLobbyMessage("Only the game creator can choose player count.", true);
+    return;
+  }
+  const existingOwnerId = state.game.ownerId;
+  const existingOwnerName = state.game.ownerName;
 
   state.game = createDefaultGameState();
   state.game.playerCount = playerCount;
   state.game.playerNames = createPlayerNames(playerCount);
   state.game.seatAssignments = {};
-  state.game.ownerId = localProfile.id;
-  state.game.ownerName = localProfile.name;
+  state.game.ownerId = existingOwnerId || localProfile.id;
+  state.game.ownerName = existingOwnerName || localProfile.name;
   state.game.currentTurn = 1;
   state.game.scores = createZeroMap(playerCount);
   state.game.foulOnlyCounts = createZeroMap(playerCount);
@@ -1142,23 +1206,37 @@ function selectPlayerCount(count) {
 
   clearUndoHistory();
   clearSelectedBalls();
+  setLobbyMessage("");
   renderAll();
   persistGameState("select_players", `Players set: ${playerCount}`);
 }
 
-function resetToPlayerSelection() {
-  state.game = createDefaultGameState();
-  addLogEntry("Game reset");
+function detachRoomListener() {
+  if (typeof roomUnsubscribe === "function") {
+    roomUnsubscribe();
+    roomUnsubscribe = null;
+  }
+}
 
+function leaveCurrentRoom() {
+  detachRoomListener();
+  roomRef = null;
+  currentRoomCode = "";
+  localStorage.removeItem(LAST_ROOM_STORAGE_KEY);
+
+  state.game = createDefaultGameState();
   clearUndoHistory();
   clearSelectedBalls();
+  setLobbyMessage("");
+  updateRoomUi();
+  renderAll();
+}
 
+function resetToPlayerSelection() {
+  leaveCurrentRoom();
   if (leaveConfirmOverlay) {
     leaveConfirmOverlay.classList.add("hidden");
   }
-
-  renderAll();
-  persistGameState("reset_game", "Game reset");
 }
 
 function attachPlayerHandlers() {
@@ -1235,15 +1313,39 @@ function applyRemoteState(game, isInitialRead = false) {
   syncMySeatNameIfNeeded();
 }
 
-async function initializeRealtimeRoom() {
-  const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-  dbInstance = getDatabase(app);
-  roomRef = ref(dbInstance, ROOM_PATH);
+async function connectToRoom(roomCode, { createIfMissing = false } = {}) {
+  if (!ensureLocalProfileName()) {
+    setLobbyMessage("Enter your name first.", true);
+    return false;
+  }
 
-  await syncLocalProfileToDatabase();
+  await ensureDatabaseReady();
+  const normalizedCode = normalizeRoomCode(roomCode);
+  if (normalizedCode.length !== 6) {
+    setLobbyMessage("Game code must be 6 letters/numbers.", true);
+    return false;
+  }
+
+  detachRoomListener();
+  roomRef = ref(dbInstance, `${ROOMS_PATH}/${normalizedCode}`);
+  currentRoomCode = normalizedCode;
+  localStorage.setItem(LAST_ROOM_STORAGE_KEY, currentRoomCode);
 
   const snapshot = await get(roomRef);
-  if (snapshot.exists()) {
+  if (!snapshot.exists()) {
+    if (!createIfMissing) {
+      setLobbyMessage("Game not found. Check the code.", true);
+      roomRef = null;
+      currentRoomCode = "";
+      return false;
+    }
+
+    const defaultState = createDefaultGameState();
+    defaultState.lastAction = buildLastAction("init_room", "Room created");
+    defaultState.updatedAt = Date.now();
+    await set(roomRef, serializeGameState(defaultState));
+    applyRemoteState(defaultState, true);
+  } else {
     let loadedState = normalizeGameState(snapshot.val());
     let shouldWriteBack = false;
 
@@ -1266,23 +1368,101 @@ async function initializeRealtimeRoom() {
     if (shouldWriteBack) {
       await set(roomRef, serializeGameState(loadedState));
     }
-
     applyRemoteState(loadedState, true);
-  } else {
-    const defaultState = createDefaultGameState();
-    defaultState.lastAction = buildLastAction("init", "Initial game state created");
-    defaultState.updatedAt = Date.now();
-    await set(roomRef, serializeGameState(defaultState));
-    applyRemoteState(defaultState, true);
   }
 
-  onValue(roomRef, (roomSnapshot) => {
+  setLobbyMessage(`Connected to room ${currentRoomCode}`);
+  updateRoomUi();
+
+  roomUnsubscribe = onValue(roomRef, (roomSnapshot) => {
     if (!roomSnapshot.exists()) return;
     applyRemoteState(roomSnapshot.val(), false);
   });
+
+  return true;
+}
+
+async function createRoomAndConnect() {
+  if (!ensureLocalProfileName()) {
+    setLobbyMessage("Enter your name first.", true);
+    return;
+  }
+
+  try {
+    const roomCode = await generateRoomCode();
+    await connectToRoom(roomCode, { createIfMissing: true });
+  } catch (error) {
+    console.error("Failed to create room:", error);
+    roomRef = null;
+    currentRoomCode = "";
+    updateRoomUi();
+    setLobbyMessage("Could not create game. Try again.", true);
+  }
+}
+
+async function joinRoomFromInput() {
+  const code = normalizeRoomCode(joinCodeInput?.value || "");
+  if (joinCodeInput) {
+    joinCodeInput.value = code;
+  }
+
+  try {
+    await connectToRoom(code, { createIfMissing: false });
+  } catch (error) {
+    console.error("Failed to join room:", error);
+    roomRef = null;
+    currentRoomCode = "";
+    updateRoomUi();
+    setLobbyMessage("Could not join game. Try again.", true);
+  }
 }
 
 function attachStaticEventHandlers() {
+  if (nameInput) {
+    nameInput.value = localProfile.name || "";
+    nameInput.addEventListener("input", () => {
+      if (setLocalProfileName(nameInput.value)) {
+        syncLocalProfileToDatabase();
+      }
+    });
+  }
+
+  if (leaveLobbyRoomBtn) {
+    leaveLobbyRoomBtn.addEventListener("click", leaveCurrentRoom);
+  }
+
+  if (saveNameBtn) {
+    saveNameBtn.addEventListener("click", async () => {
+      if (!setLocalProfileName(nameInput?.value || "")) {
+        setLobbyMessage("Enter a valid name.", true);
+        return;
+      }
+      await ensureDatabaseReady();
+      await syncLocalProfileToDatabase();
+      setLobbyMessage("Name saved.");
+    });
+  }
+
+  if (createGameBtn) {
+    createGameBtn.addEventListener("click", createRoomAndConnect);
+  }
+
+  if (joinGameBtn) {
+    joinGameBtn.addEventListener("click", joinRoomFromInput);
+  }
+
+  if (joinCodeInput) {
+    joinCodeInput.addEventListener("input", () => {
+      joinCodeInput.value = normalizeRoomCode(joinCodeInput.value);
+    });
+    joinCodeInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        joinRoomFromInput();
+      }
+    });
+  }
+
   if (undoLastBtn) {
     undoLastBtn.addEventListener("click", undoLastAction);
     updateUndoRedoButtonState();
@@ -1295,6 +1475,17 @@ function attachStaticEventHandlers() {
 
   if (resetGameBtn) {
     resetGameBtn.addEventListener("click", startNewGame);
+  }
+
+  if (cancelNewGameBtn) {
+    cancelNewGameBtn.addEventListener("click", closeNewGameConfirm);
+  }
+
+  if (confirmNewGameBtn) {
+    confirmNewGameBtn.addEventListener("click", () => {
+      closeNewGameConfirm();
+      performNewGameReset();
+    });
   }
 
   playerSelectButtons.forEach((btn) => {
@@ -1359,18 +1550,18 @@ function attachStaticEventHandlers() {
 }
 
 async function init() {
-  if (!enforceOnlineOnlyMode()) {
-    return;
-  }
-
-  ensureLocalProfileName();
   attachStaticEventHandlers();
+  updateRoomUi();
+  renderAll();
 
-  try {
-    await initializeRealtimeRoom();
-  } catch (error) {
-    console.error("Failed to initialize multiplayer sync:", error);
-    showOfflineRequiredOverlay();
+  const lastRoom = normalizeRoomCode(
+    localStorage.getItem(LAST_ROOM_STORAGE_KEY) || ""
+  );
+  if (lastRoom.length === 6) {
+    if (joinCodeInput) {
+      joinCodeInput.value = lastRoom;
+    }
+    setLobbyMessage(`Last room found (${lastRoom}). Tap Join Game.`);
   }
 }
 

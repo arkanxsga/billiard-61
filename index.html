@@ -33,8 +33,28 @@
   <div class="app">
     <div id="playerSelectOverlay" class="player-select">
       <h1>Billiard 61</h1>
-      <p>Select how many players:</p>
-      <div class="player-select-options">
+      <div id="connectPanel" class="connect-panel">
+        <label class="field-label" for="nameInput">Your name</label>
+        <input id="nameInput" class="text-input" type="text" maxlength="24" placeholder="Enter your name" />
+        <div class="connect-actions">
+          <button id="saveNameBtn" class="secondary">Save Name</button>
+          <button id="createGameBtn" class="primary">Create Game</button>
+        </div>
+        <div class="join-row">
+          <input id="joinCodeInput" class="text-input code-input" type="text" maxlength="6" placeholder="Game code" />
+          <button id="joinGameBtn" class="secondary">Join Game</button>
+        </div>
+      </div>
+
+      <div id="roomSetupPanel" class="hidden">
+        <p class="room-code-label">Room Code: <span id="roomCodeText"></span></p>
+        <p>Select how many players:</p>
+        <button id="leaveLobbyRoom" class="secondary">Leave Room</button>
+      </div>
+
+      <div id="lobbyMessage" class="lobby-message"></div>
+
+      <div id="playerCountOptions" class="player-select-options hidden">
         <button class="player-select-option" data-count="1">1 Player</button>
         <button class="player-select-option" data-count="2">2 Players</button>
         <button class="player-select-option" data-count="3">3 Players</button>
@@ -47,7 +67,10 @@
         <button id="backSelect" class="icon-button back-button" title="Change players">
           ↩
         </button>
-        <h1>Billiard 61</h1>
+        <div class="title-block">
+          <h1>Billiard 61</h1>
+          <div id="roomBadge" class="room-badge hidden"></div>
+        </div>
         <div class="header-actions">
           <button id="undoLast" class="secondary" disabled>Undo</button>
           <button id="redoLast" class="secondary" disabled>Redo</button>
@@ -81,10 +104,21 @@
       <div id="leaveConfirm" class="modal-overlay hidden">
         <div class="modal">
           <div class="modal-title">Are you sure you want to leave?</div>
-          <div class="modal-subtitle">If you leave all progress will be lost.</div>
+          <div class="modal-subtitle">You will leave this room.</div>
           <div class="modal-actions">
             <button id="stayHere" class="modal-btn stay">Stay</button>
             <button id="leaveNow" class="modal-btn leave">Leave</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="newGameConfirm" class="modal-overlay hidden">
+        <div class="modal">
+          <div class="modal-title">Start a new game?</div>
+          <div class="modal-subtitle">Current game progress will be reset.</div>
+          <div class="modal-actions">
+            <button id="cancelNewGame" class="modal-btn stay">Cancel</button>
+            <button id="confirmNewGame" class="modal-btn leave">New Game</button>
           </div>
         </div>
       </div>
