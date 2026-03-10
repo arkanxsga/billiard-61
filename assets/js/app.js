@@ -1262,14 +1262,12 @@ async function openJoinGameModal() {
       const game = normalizeGameState(value);
       const seatIds = Object.values(game.seatAssignments || {}).filter(Boolean);
       const activeSeats = seatIds.length;
-      const activeOthers = seatIds.filter((id) => id !== localProfile.id).length;
       return {
         code,
         name: sanitizeGameName(game.roomName || ""),
         playerCount: Number(game.playerCount || 0),
         ownerId: String(game.ownerId || ""),
         activeSeats,
-        activeOthers,
         updatedAt: Number(game.updatedAt || 0),
       };
     })
@@ -1277,10 +1275,7 @@ async function openJoinGameModal() {
       (game) =>
         game.name &&
         game.playerCount > 0 &&
-        (
-          game.ownerId !== localProfile.id ||
-          game.activeOthers > 0
-        )
+        (Boolean(game.ownerId) || game.activeSeats > 0)
     )
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 50);
