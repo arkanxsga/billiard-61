@@ -10,6 +10,7 @@ import {
   get,
   onValue,
   update,
+  remove,
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
 
 const firebaseConfig = {
@@ -64,6 +65,7 @@ const leaveNowBtn = document.getElementById("leaveNow");
 const logListEl = document.getElementById("logList");
 const undoLastBtn = document.getElementById("undoLast");
 const redoLastBtn = document.getElementById("redoLast");
+const kickPlayerBtn = document.getElementById("kickPlayerBtn");
 const statusBar = document.getElementById("statusBar");
 const newGameConfirmOverlay = document.getElementById("newGameConfirm");
 const cancelNewGameBtn = document.getElementById("cancelNewGame");
@@ -76,8 +78,12 @@ const confirmCreateGameBtn = document.getElementById("confirmCreateGame");
 const joinGameModal = document.getElementById("joinGameModal");
 const joinGamesListEl = document.getElementById("joinGamesList");
 const closeJoinGameBtn = document.getElementById("closeJoinGame");
+const kickPlayerModal = document.getElementById("kickPlayerModal");
+const kickPlayersListEl = document.getElementById("kickPlayersList");
+const closeKickPlayerBtn = document.getElementById("closeKickPlayer");
 const nameModal = document.getElementById("nameModal");
 const nameModalInput = document.getElementById("nameModalInput");
+const cancelNameModalBtn = document.getElementById("cancelNameModalBtn");
 const saveNameModalBtn = document.getElementById("saveNameModalBtn");
 
 let roomRef = null;
@@ -247,6 +253,9 @@ function createDefaultGameState() {
     playerCount: 0,
     playerNames: {},
     seatAssignments: {},
+    kickedUsers: {},
+    roomClosedAt: 0,
+    roomClosedBy: "",
     ownerId: "",
     ownerName: "",
     currentTurn: 1,
@@ -267,6 +276,9 @@ function serializeGameState(game) {
     playerCount: game.playerCount,
     playerNames: { ...game.playerNames },
     seatAssignments: { ...(game.seatAssignments || {}) },
+    kickedUsers: { ...(game.kickedUsers || {}) },
+    roomClosedAt: Number(game.roomClosedAt || 0),
+    roomClosedBy: game.roomClosedBy || "",
     ownerId: game.ownerId || "",
     ownerName: game.ownerName || "",
     currentTurn: game.currentTurn,
@@ -325,6 +337,17 @@ function normalizeGameState(raw) {
   normalized.roomName = sanitizeGameName(raw.roomName || "");
   normalized.playerCount = playerCount;
   normalized.playerNames = createPlayerNames(playerCount);
+  if (raw.kickedUsers && typeof raw.kickedUsers === "object") {
+    for (const [userId, at] of Object.entries(raw.kickedUsers)) {
+      if (!userId) continue;
+      const kickedAt = Number(at);
+      if (Number.isFinite(kickedAt) && kickedAt > 0) {
+        normalized.kickedUsers[userId] = kickedAt;
+      }
+    }
+  }
+  normalized.roomClosedAt = Number(raw.roomClosedAt || 0);
+  normalized.roomClosedBy = String(raw.roomClosedBy || "");
   normalized.ownerId =
     typeof raw.ownerId === "string" ? raw.ownerId.trim() : "";
   normalized.ownerName = sanitizeName(raw.ownerName || "");
@@ -527,6 +550,10 @@ function canCurrentUserStartNewGame() {
   return Boolean(state.game.ownerId && state.game.ownerId === localProfile.id);
 }
 
+function isCurrentUserGameCreator() {
+  return Boolean(state.game.ownerId && state.game.ownerId === localProfile.id);
+}
+
 function updateNewGameButtonState() {
   if (!resetGameBtn) return;
   const isOwner = canCurrentUserStartNewGame();
@@ -534,6 +561,15 @@ function updateNewGameButtonState() {
   resetGameBtn.title = isOwner
     ? "Start a new game"
     : "Only the game creator can start a new game";
+}
+
+function updateKickButtonState() {
+  if (!kickPlayerBtn) return;
+  const isCreator = isCurrentUserGameCreator();
+  kickPlayerBtn.disabled = !isCreator || state.game.playerCount === 0;
+  kickPlayerBtn.title = isCreator
+    ? "Kick players from this game"
+    : "Only the game creator can kick players";
 }
 
 function getPlayerLabel(player) {
@@ -706,12 +742,22 @@ function createBallElement(ball) {
 
 function buildPlayersUI() {
   playersContainer.innerHTML = "";
+  const mySeat = getCurrentUserSeat();
 
   for (let i = 1; i <= state.game.playerCount; i++) {
     const displayName = getDisplayPlayerName(i);
     const seatOwner = state.game.seatAssignments?.[i] || "";
     const isMySeat = seatOwner === localProfile.id;
-    const seatLabel = isMySeat ? "Seated" : seatOwner ? "Take Seat" : "Sit Here";
+    const isTakenByOther = Boolean(seatOwner && !isMySeat);
+    const isLockedByMySeat = Boolean(mySeat && mySeat !== i);
+    const canSitHere = !isTakenByOther && !isLockedByMySeat;
+    const seatLabel = isMySeat
+      ? "Seated"
+      : isTakenByOther
+        ? "Taken"
+        : isLockedByMySeat
+          ? "Locked"
+          : "Sit Here";
     const player = document.createElement("div");
     player.className = "player";
     player.dataset.player = String(i);
@@ -720,7 +766,7 @@ function buildPlayersUI() {
       <div class="player-header">
         <span class="player-name">${escapeHtml(displayName)}</span>
         <div class="player-header-right">
-          <button class="seat-btn${isMySeat ? " current" : ""}" data-player="${i}">
+          <button class="seat-btn${isMySeat ? " current" : ""}" data-player="${i}" ${canSitHere ? "" : "disabled"}>
             ${seatLabel}
           </button>
           <span class="score" id="scoreP${i}">0</span>
@@ -840,6 +886,7 @@ function renderAll() {
   renderStatus();
   updateUndoRedoButtonState();
   updateNewGameButtonState();
+  updateKickButtonState();
 }
 
 function refreshSelectionVisuals() {
@@ -938,6 +985,7 @@ function rackCompletionMessage(previousHadRack) {
 
 function persistGameState(actionType, actionMessage) {
   if (!roomRef) return;
+  const roomRefForWrite = roomRef;
 
   recalculateScoresForGame(state.game);
   updatePottedBallsForGame(state.game);
@@ -948,7 +996,7 @@ function persistGameState(actionType, actionMessage) {
 
   const payload = serializeGameState(state.game);
   saveQueue = saveQueue
-    .then(() => update(roomRef, payload))
+    .then(() => update(roomRefForWrite, payload))
     .catch((error) => {
       console.error("Failed to sync game state:", error);
     });
@@ -1071,15 +1119,19 @@ function seatCurrentUser(player) {
   }
 
   const previousSeat = getCurrentUserSeat();
-  if (previousSeat === playerIndex) return;
-
-  const replacedUser = state.game.seatAssignments[playerIndex] || "";
-  for (let i = 1; i <= state.game.playerCount; i++) {
-    if (state.game.seatAssignments[i] === localProfile.id) {
-      delete state.game.seatAssignments[i];
-      state.game.playerNames[i] = `Player ${i}`;
-    }
+  if (previousSeat && previousSeat !== playerIndex) {
+    addLogEntry(`You are already seated on Player ${previousSeat}`);
+    renderAll();
+    return;
   }
+
+  const existingSeatOwner = state.game.seatAssignments[playerIndex] || "";
+  if (existingSeatOwner && existingSeatOwner !== localProfile.id) {
+    addLogEntry(`Player ${playerIndex} is already taken`);
+    renderAll();
+    return;
+  }
+  if (previousSeat === playerIndex) return;
 
   state.game.seatAssignments[playerIndex] = localProfile.id;
   state.game.playerNames[playerIndex] = localProfile.name;
@@ -1090,15 +1142,7 @@ function seatCurrentUser(player) {
     }
   }
 
-  if (previousSeat) {
-    addLogEntry(
-      `${localProfile.name} moved from Player ${previousSeat} to Player ${playerIndex}`
-    );
-  } else if (replacedUser && replacedUser !== localProfile.id) {
-    addLogEntry(`${localProfile.name} took Player ${playerIndex}`);
-  } else {
-    addLogEntry(`${localProfile.name} sat on Player ${playerIndex}`);
-  }
+  addLogEntry(`${localProfile.name} sat on Player ${playerIndex}`);
 
   renderAll();
   persistGameState("seat_player", `${localProfile.name} seated on Player ${playerIndex}`);
@@ -1186,6 +1230,81 @@ function closeJoinGameModal() {
   joinGameModal.classList.add("hidden");
 }
 
+function openKickPlayerModal() {
+  if (!kickPlayerModal) return;
+  if (!isCurrentUserGameCreator()) return;
+  renderKickPlayersList();
+  kickPlayerModal.classList.remove("hidden");
+}
+
+function closeKickPlayerModal() {
+  if (!kickPlayerModal) return;
+  kickPlayerModal.classList.add("hidden");
+}
+
+function renderKickPlayersList() {
+  if (!kickPlayersListEl) return;
+  kickPlayersListEl.innerHTML = "";
+
+  const players = [];
+  for (let i = 1; i <= state.game.playerCount; i++) {
+    const userId = state.game.seatAssignments?.[i];
+    if (!userId || userId === localProfile.id) continue;
+    players.push({
+      player: i,
+      userId,
+      name: getDisplayPlayerName(i),
+    });
+  }
+
+  if (players.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "modal-subtitle";
+    empty.textContent = "No players available to kick.";
+    kickPlayersListEl.appendChild(empty);
+    return;
+  }
+
+  players.forEach((item) => {
+    const button = document.createElement("button");
+    button.className = "join-game-item";
+    button.dataset.userId = item.userId;
+    button.dataset.player = String(item.player);
+    button.innerHTML = `
+      <div class="join-game-item-name">${escapeHtml(item.name)}</div>
+      <div class="join-game-item-meta">Player ${item.player} • Tap to kick</div>
+    `;
+    kickPlayersListEl.appendChild(button);
+  });
+}
+
+function kickPlayerFromGame(userId, player) {
+  if (!isCurrentUserGameCreator()) return;
+  if (!userId || userId === localProfile.id) return;
+
+  let seatNumber = Number(player);
+  if (!seatNumber || state.game.seatAssignments?.[seatNumber] !== userId) {
+    seatNumber = 0;
+    for (let i = 1; i <= state.game.playerCount; i++) {
+      if (state.game.seatAssignments?.[i] === userId) {
+        seatNumber = i;
+        break;
+      }
+    }
+  }
+  if (!seatNumber) return;
+
+  const kickedName = getDisplayPlayerName(seatNumber);
+  delete state.game.seatAssignments[seatNumber];
+  state.game.playerNames[seatNumber] = `Player ${seatNumber}`;
+  state.game.kickedUsers[userId] = Date.now();
+
+  addLogEntry(`${kickedName} was kicked by ${localProfile.name}`);
+  renderAll();
+  persistGameState("kick_player", `${kickedName} was kicked`);
+  renderKickPlayersList();
+}
+
 function openNameModal() {
   if (!nameModal) return;
   if (nameModalInput) {
@@ -1260,14 +1379,11 @@ async function openJoinGameModal() {
   const games = Object.entries(rawGames || {})
     .map(([code, value]) => {
       const game = normalizeGameState(value);
-      const seatIds = Object.values(game.seatAssignments || {}).filter(Boolean);
-      const activeSeats = seatIds.length;
       return {
         code,
         name: sanitizeGameName(game.roomName || ""),
         playerCount: Number(game.playerCount || 0),
         ownerId: String(game.ownerId || ""),
-        activeSeats,
         updatedAt: Number(game.updatedAt || 0),
       };
     })
@@ -1275,7 +1391,7 @@ async function openJoinGameModal() {
       (game) =>
         game.name &&
         game.playerCount > 0 &&
-        (Boolean(game.ownerId) || game.activeSeats > 0)
+        Boolean(game.ownerId)
     )
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 50);
@@ -1321,39 +1437,18 @@ function buildRoomUpdateForLeavingUser() {
   if (!roomRef || state.game.playerCount <= 0) return null;
 
   const roomGame = normalizeGameState(state.game);
-  let changed = false;
+  if (roomGame.ownerId === localProfile.id) {
+    return { __deleteRoom: true };
+  }
 
+  let changed = false;
   for (let i = 1; i <= roomGame.playerCount; i++) {
     if (roomGame.seatAssignments[i] === localProfile.id) {
       delete roomGame.seatAssignments[i];
       roomGame.playerNames[i] = `Player ${i}`;
       changed = true;
+      break;
     }
-  }
-
-  if (roomGame.ownerId === localProfile.id) {
-    let replacementSeat = null;
-    for (let i = 1; i <= roomGame.playerCount; i++) {
-      if (roomGame.seatAssignments[i]) {
-        replacementSeat = i;
-        break;
-      }
-    }
-
-    if (replacementSeat) {
-      roomGame.ownerId = roomGame.seatAssignments[replacementSeat];
-      roomGame.ownerName =
-        sanitizeName(roomGame.playerNames[replacementSeat]) ||
-        `Player ${replacementSeat}`;
-      roomGame.log.unshift(
-        createLogEntry(`Leader changed to ${roomGame.ownerName}`)
-      );
-    } else {
-      roomGame.ownerId = "";
-      roomGame.ownerName = "";
-      roomGame.log.unshift(createLogEntry("Leader left the room"));
-    }
-    changed = true;
   }
 
   if (!changed) return null;
@@ -1371,12 +1466,18 @@ function buildRoomUpdateForLeavingUser() {
 
 function syncLeaveToRoom() {
   if (!roomRef) return;
+  const roomRefAtLeave = roomRef;
 
   const payload = buildRoomUpdateForLeavingUser();
   if (!payload) return;
 
   saveQueue = saveQueue
-    .then(() => update(roomRef, payload))
+    .then(() => {
+      if (payload.__deleteRoom) {
+        return remove(roomRefAtLeave);
+      }
+      return update(roomRefAtLeave, payload);
+    })
     .catch((error) => {
       console.error("Failed to sync leave state:", error);
     });
@@ -1389,8 +1490,10 @@ function detachRoomListener() {
   }
 }
 
-function leaveCurrentRoom() {
-  syncLeaveToRoom();
+function leaveCurrentRoom(sync = true) {
+  if (sync) {
+    syncLeaveToRoom();
+  }
   detachRoomListener();
   roomRef = null;
   currentRoomCode = "";
@@ -1399,13 +1502,22 @@ function leaveCurrentRoom() {
   state.game = createDefaultGameState();
   clearUndoHistory();
   clearSelectedBalls();
+  closeJoinGameModal();
+  closeCreateGameModal();
+  closeKickPlayerModal();
+  closeNewGameConfirm();
   setLobbyMessage("");
   updateRoomUi();
   renderAll();
 }
 
+function forceLeaveFromGame(message) {
+  leaveCurrentRoom(false);
+  setLobbyMessage(message, true);
+}
+
 function resetToPlayerSelection() {
-  leaveCurrentRoom();
+  leaveCurrentRoom(true);
   if (leaveConfirmOverlay) {
     leaveConfirmOverlay.classList.add("hidden");
   }
@@ -1471,25 +1583,29 @@ function attachPlayerHandlers() {
 }
 
 function claimLeadershipIfNeeded() {
-  if (!roomRef) return;
-  if (state.game.playerCount <= 0) return;
-  if (state.game.ownerId) return;
-
-  const mySeat = getCurrentUserSeat();
-  if (!mySeat) return;
-
-  state.game.ownerId = localProfile.id;
-  state.game.ownerName = localProfile.name;
-  addLogEntry(`${localProfile.name} became leader`);
-  renderAll();
-  persistGameState("claim_owner", "Leader claimed");
+  return;
 }
 
 function applyRemoteState(game, isInitialRead = false) {
   const previousActionBy = game.lastAction?.by || "";
   const isOtherClient = previousActionBy && previousActionBy !== CLIENT_ID;
+  const incoming = normalizeGameState(game);
+  const kickedAt = Number(incoming.kickedUsers?.[localProfile.id] || 0);
+  const closedByOther =
+    Number(incoming.roomClosedAt || 0) > 0 &&
+    incoming.roomClosedBy &&
+    incoming.roomClosedBy !== localProfile.id;
 
-  state.game = normalizeGameState(game);
+  if (kickedAt > 0) {
+    forceLeaveFromGame("You were kicked out of the game.");
+    return;
+  }
+  if (closedByOther) {
+    forceLeaveFromGame("Game ended because the creator left.");
+    return;
+  }
+
+  state.game = incoming;
   clearSelectedBalls();
 
   if (isOtherClient && !isInitialRead) {
@@ -1498,7 +1614,6 @@ function applyRemoteState(game, isInitialRead = false) {
 
   renderAll();
   syncMySeatNameIfNeeded();
-  claimLeadershipIfNeeded();
 }
 
 async function connectToRoom(roomCode, { createIfMissing = false } = {}) {
@@ -1559,6 +1674,10 @@ async function connectToRoom(roomCode, { createIfMissing = false } = {}) {
     applyRemoteState(loadedState, true);
   }
 
+  if (!currentRoomCode || !roomRef) {
+    return false;
+  }
+
   const joinedName = sanitizeGameName(state.game.roomName || "");
   setLobbyMessage(
     joinedName ? `Joined "${joinedName}"` : `Connected to room ${currentRoomCode}`
@@ -1566,7 +1685,10 @@ async function connectToRoom(roomCode, { createIfMissing = false } = {}) {
   updateRoomUi();
 
   roomUnsubscribe = onValue(roomRef, (roomSnapshot) => {
-    if (!roomSnapshot.exists()) return;
+    if (!roomSnapshot.exists()) {
+      forceLeaveFromGame("Game ended because the creator left.");
+      return;
+    }
     applyRemoteState(roomSnapshot.val(), false);
   });
 
@@ -1652,6 +1774,12 @@ function attachStaticEventHandlers() {
     });
   }
 
+  if (cancelNameModalBtn) {
+    cancelNameModalBtn.addEventListener("click", () => {
+      closeNameModal();
+    });
+  }
+
   if (nameModalInput) {
     nameModalInput.addEventListener("keydown", async (event) => {
       if (event.key !== "Enter") return;
@@ -1665,6 +1793,25 @@ function attachStaticEventHandlers() {
 
   if (closeJoinGameBtn) {
     closeJoinGameBtn.addEventListener("click", closeJoinGameModal);
+  }
+
+  if (kickPlayerBtn) {
+    kickPlayerBtn.addEventListener("click", openKickPlayerModal);
+  }
+
+  if (closeKickPlayerBtn) {
+    closeKickPlayerBtn.addEventListener("click", closeKickPlayerModal);
+  }
+
+  if (kickPlayersListEl) {
+    kickPlayersListEl.addEventListener("click", (event) => {
+      const button = event.target.closest(".join-game-item");
+      if (!button) return;
+      const userId = String(button.dataset.userId || "");
+      const player = Number(button.dataset.player || 0);
+      if (!userId || !player) return;
+      kickPlayerFromGame(userId, player);
+    });
   }
 
   if (joinGamesListEl) {
