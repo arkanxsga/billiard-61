@@ -29,8 +29,8 @@ const PROFILE_STORAGE_KEY = "billiard61.profile";
 const LAST_ROOM_STORAGE_KEY = "billiard61.lastRoom";
 const MAX_LOG_ENTRIES = 80;
 const MAX_UNDO_HISTORY = 150;
-const GAME_DATABASE_STORAGE_DISABLED = true;
-const LOCAL_ROOM_CODE = "LOCAL";
+const WINNING_SCORE = 61;
+const GAME_DATABASE_STORAGE_DISABLED = false;
 const CLIENT_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 const BALL_COLORS = [
   "#f7d51d",
@@ -98,7 +98,6 @@ let currentRoomCode = "";
 let roomUnsubscribe = null;
 let saveQueue = Promise.resolve();
 let localProfile = loadLocalProfile();
-let hasClearedStoredGames = false;
 let pendingKickTarget = null;
 let lobbyMessageTimeoutId = null;
 
@@ -237,9 +236,9 @@ function updateRoomUi() {
     createGameBtn.disabled = !ensureLocalProfileName();
   }
   if (joinGameBtn) {
-    joinGameBtn.disabled = true;
-    joinGameBtn.title =
-      "Join Game is disabled so gameplay is not stored in the database.";
+    const canUseJoin = ensureLocalProfileName();
+    joinGameBtn.disabled = !canUseJoin;
+    joinGameBtn.title = canUseJoin ? "Join an existing game" : "Set username first";
   }
 }
 
@@ -249,18 +248,6 @@ async function ensureDatabaseReady() {
   dbInstance = getDatabase(app);
   await syncLocalProfileToDatabase();
   return dbInstance;
-}
-
-async function clearStoredGamesFromDatabase() {
-  if (hasClearedStoredGames) return;
-  hasClearedStoredGames = true;
-
-  try {
-    await ensureDatabaseReady();
-    await remove(ref(dbInstance, ROOMS_PATH));
-  } catch (error) {
-    console.error("Failed to clear stored games:", error);
-  }
 }
 
 function randomRoomCode() {
@@ -556,27 +543,39 @@ function updatePottedBallsForGame(game) {
     }));
 }
 
+function getScoreRankingForGame(game) {
+  const ranking = [];
+  for (let i = 1; i <= game.playerCount; i++) {
+    ranking.push({
+      player: i,
+      name: getDisplayPlayerName(i, game),
+      score: Number(game.scores[i] || 0),
+    });
+  }
+  ranking.sort((a, b) => {
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+    return a.player - b.player;
+  });
+  return ranking;
+}
+
 function computeWinnerForGame(game) {
   if (game.playerCount === 0) return null;
+  const ranking = getScoreRankingForGame(game);
+  if (ranking.length === 0) return null;
+
+  const top = ranking[0];
+  const second = ranking[1];
+  const isUniqueLeader = !second || top.score > second.score;
   const anyOnRack = game.balls.some((ball) => ball.locationType === "rack");
-  if (anyOnRack) return null;
 
-  let bestPlayer = 0;
-  let bestScore = -Infinity;
-  let tie = false;
-
-  for (let i = 1; i <= game.playerCount; i++) {
-    const score = Number(game.scores[i] || 0);
-    if (score > bestScore) {
-      bestScore = score;
-      bestPlayer = i;
-      tie = false;
-    } else if (score === bestScore) {
-      tie = true;
-    }
+  if (top.score >= WINNING_SCORE) {
+    return isUniqueLeader ? top.player : null;
   }
-
-  return tie ? null : bestPlayer;
+  if (anyOnRack) return null;
+  return isUniqueLeader ? top.player : null;
 }
 
 function isGameFinished(game) {
@@ -810,6 +809,7 @@ function createBallElement(ball) {
 function buildPlayersUI() {
   playersContainer.innerHTML = "";
   const mySeat = getCurrentUserSeat();
+  const gameLocked = Boolean(state.game.winner);
 
   for (let i = 1; i <= state.game.playerCount; i++) {
     const displayName = getDisplayPlayerName(i);
@@ -817,14 +817,16 @@ function buildPlayersUI() {
     const isMySeat = seatOwner === localProfile.id;
     const isTakenByOther = Boolean(seatOwner && !isMySeat);
     const isLockedByMySeat = Boolean(mySeat && mySeat !== i);
-    const canSitHere = !isTakenByOther && !isLockedByMySeat;
-    const seatLabel = isMySeat
-      ? "Seated"
-      : isTakenByOther
-        ? "Taken"
-        : isLockedByMySeat
-          ? "Locked"
-          : "Sit Here";
+    const canSitHere = !gameLocked && !isTakenByOther && !isLockedByMySeat;
+    const seatLabel = gameLocked
+      ? "Game Over"
+      : isMySeat
+        ? "Seated"
+        : isTakenByOther
+          ? "Taken"
+          : isLockedByMySeat
+            ? "Locked"
+            : "Sit Here";
     const player = document.createElement("div");
     player.className = "player";
     player.dataset.player = String(i);
@@ -849,7 +851,7 @@ function buildPlayersUI() {
           <div class="player-balls" id="ballsP${i}Foul"></div>
         </div>
       </div>
-      <button class="foul-only-btn" data-player="${i}">Foul (no ball) -4</button>
+      <button class="foul-only-btn" data-player="${i}" ${gameLocked ? "disabled" : ""}>Foul (no ball) -4</button>
     `;
 
     playersContainer.appendChild(player);
@@ -913,7 +915,26 @@ function renderStatus() {
   if (state.game.winner) {
     const winnerName = getDisplayPlayerName(state.game.winner);
     const winnerScore = state.game.scores[state.game.winner] ?? 0;
-    statusBar.textContent = `Winner: ${winnerName} (${winnerScore})`;
+    const anyOnRack = state.game.balls.some((ball) => ball.locationType === "rack");
+    if (anyOnRack) {
+      statusBar.textContent = `Winner: ${winnerName} (${winnerScore}) - reached ${WINNING_SCORE}`;
+    } else {
+      const ranking = getScoreRankingForGame(state.game);
+      const placements = [];
+      if (ranking[1]) {
+        placements.push(`2nd: ${ranking[1].name}`);
+      }
+      if (ranking[2]) {
+        placements.push(`3rd: ${ranking[2].name}`);
+      }
+      if (ranking[3]) {
+        placements.push(`4th: ${ranking[3].name}`);
+      }
+      statusBar.textContent =
+        placements.length > 0
+          ? `Winner: ${winnerName} (${winnerScore}) - ${placements.join(" • ")}`
+          : `Winner: ${winnerName} (${winnerScore})`;
+    }
     return;
   }
 
@@ -1017,37 +1038,45 @@ function getDropBallNumber(event) {
   return number || null;
 }
 
-function rackCompletionMessage(previousHadRack) {
+function rackCompletionMessages(previousHadRack, previousWinner) {
+  const messages = [];
   const anyOnRackNow = state.game.balls.some((ball) => ball.locationType === "rack");
-  if (anyOnRackNow) {
-    state.game.winner = null;
-    return null;
+  const winnerNow = computeWinnerForGame(state.game);
+  const ranking = getScoreRankingForGame(state.game);
+  const previousWinnerId = Number(previousWinner || 0);
+
+  state.game.winner = winnerNow;
+
+  if (winnerNow && winnerNow !== previousWinnerId) {
+    const winnerName = getDisplayPlayerName(winnerNow);
+    const winnerScore = Number(state.game.scores[winnerNow] || 0);
+    if (winnerScore >= WINNING_SCORE) {
+      messages.push(`${winnerName} has won with ${winnerScore} points.`);
+    } else if (!anyOnRackNow && previousHadRack) {
+      messages.push(`Game finished: ${winnerName} wins (${winnerScore})`);
+    }
+  } else if (!winnerNow && !anyOnRackNow && previousHadRack) {
+    const bestScore = ranking[0] ? ranking[0].score : 0;
+    messages.push(`Game finished: tie at ${bestScore}`);
   }
 
-  let bestPlayer = 0;
-  let bestScore = -Infinity;
-  let tie = false;
-
-  for (let i = 1; i <= state.game.playerCount; i++) {
-    const score = state.game.scores[i] ?? 0;
-    if (score > bestScore) {
-      bestScore = score;
-      bestPlayer = i;
-      tie = false;
-    } else if (score === bestScore) {
-      tie = true;
+  if (!anyOnRackNow && previousHadRack) {
+    const placements = [];
+    if (ranking[1]) {
+      placements.push(`2nd: ${ranking[1].name} (${ranking[1].score})`);
+    }
+    if (ranking[2]) {
+      placements.push(`3rd: ${ranking[2].name} (${ranking[2].score})`);
+    }
+    if (ranking[3]) {
+      placements.push(`4th: ${ranking[3].name} (${ranking[3].score})`);
+    }
+    if (placements.length > 0) {
+      messages.push(placements.join(" • "));
     }
   }
 
-  if (tie) {
-    state.game.winner = null;
-    return previousHadRack ? `Game finished: tie at ${bestScore}` : null;
-  }
-
-  state.game.winner = bestPlayer;
-  return previousHadRack
-    ? `Game finished: ${getDisplayPlayerName(bestPlayer)} wins (${bestScore})`
-    : null;
+  return messages;
 }
 
 function persistGameState(actionType, actionMessage) {
@@ -1084,6 +1113,7 @@ function applyShots(ballNumbers, player, isFoul) {
   saveUndoPoint();
 
   const previousHadRack = state.game.balls.some((ball) => ball.locationType === "rack");
+  const previousWinner = state.game.winner;
 
   numbersToApply.forEach((number) => {
     const ball = state.game.balls.find((item) => item.number === number);
@@ -1112,10 +1142,8 @@ function applyShots(ballNumbers, player, isFoul) {
     }
   }
 
-  const completionMessage = rackCompletionMessage(previousHadRack);
-  if (completionMessage) {
-    addLogEntry(completionMessage);
-  }
+  const completionMessages = rackCompletionMessages(previousHadRack, previousWinner);
+  completionMessages.forEach((message) => addLogEntry(message));
 
   clearSelectedBalls();
   renderAll();
@@ -1124,7 +1152,7 @@ function applyShots(ballNumbers, player, isFoul) {
 }
 
 function moveBallsToRack(ballNumbers) {
-  if (state.game.playerCount === 0) return false;
+  if (state.game.playerCount === 0 || state.game.winner) return false;
 
   const ballsToMove = ballNumbers
     .map((number) => state.game.balls.find((ball) => ball.number === number))
@@ -1138,9 +1166,9 @@ function moveBallsToRack(ballNumbers) {
     ball.player = null;
   });
 
-  state.game.winner = null;
   recalculateScoresForGame(state.game);
   updatePottedBallsForGame(state.game);
+  state.game.winner = computeWinnerForGame(state.game);
 
   addLogEntry(
     ballsToMove.length > 1
@@ -1158,6 +1186,8 @@ function applyFoulOnly(player) {
   if (state.game.playerCount === 0 || state.game.winner) return;
 
   saveUndoPoint();
+  const previousHadRack = state.game.balls.some((ball) => ball.locationType === "rack");
+  const previousWinner = state.game.winner;
   state.game.foulOnlyCounts[player] = (state.game.foulOnlyCounts[player] || 0) + 1;
 
   recalculateScoresForGame(state.game);
@@ -1166,16 +1196,20 @@ function applyFoulOnly(player) {
 
   addLogEntry(`${getPlayerLabel(player)} foul (no ball) -4`);
 
-  const completionMessage = rackCompletionMessage(false);
-  if (completionMessage) {
-    addLogEntry(completionMessage);
-  }
+  const completionMessages = rackCompletionMessages(previousHadRack, previousWinner);
+  completionMessages.forEach((message) => addLogEntry(message));
 
   renderAll();
   persistGameState("foul_only", "Foul without ball");
 }
 
 function seatCurrentUser(player) {
+  if (state.game.winner) {
+    addLogEntry("Game is finished. Start a new game to continue.");
+    renderAll();
+    return;
+  }
+
   const playerIndex = Number(player);
   if (
     !Number.isInteger(playerIndex) ||
@@ -1489,10 +1523,33 @@ async function openJoinGameModal() {
     openNameModal();
     return;
   }
-  setLobbyMessage(
-    "Join Game is disabled. Only usernames are saved in database.",
-    true
-  );
+  if (!joinGameModal) return;
+  await ensureDatabaseReady();
+
+  const snapshot = await get(ref(dbInstance, ROOMS_PATH));
+  const rawGames = snapshot.exists() ? snapshot.val() : {};
+  const games = Object.entries(rawGames || {})
+    .map(([code, value]) => {
+      const game = normalizeGameState(value);
+      return {
+        code,
+        name: sanitizeGameName(game.roomName || ""),
+        playerCount: Number(game.playerCount || 0),
+        ownerId: String(game.ownerId || ""),
+        updatedAt: Number(game.updatedAt || 0),
+      };
+    })
+    .filter(
+      (game) =>
+        game.name &&
+        game.playerCount > 0 &&
+        Boolean(game.ownerId)
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 50);
+
+  renderJoinGamesList(games);
+  joinGameModal.classList.remove("hidden");
 }
 
 function startNewGame() {
@@ -1797,18 +1854,6 @@ async function connectToRoom(roomCode, { createIfMissing = false } = {}) {
   return true;
 }
 
-function startLocalGame(gameName, playerCount) {
-  const initialGame = buildCreatedGameState(gameName, playerCount);
-  state.game = normalizeGameState(initialGame);
-  detachRoomListener();
-  roomRef = null;
-  currentRoomCode = LOCAL_ROOM_CODE;
-  localStorage.removeItem(LAST_ROOM_STORAGE_KEY);
-  clearUndoHistory();
-  clearSelectedBalls();
-  renderAll();
-}
-
 async function createRoomAndConnect(gameName, playerCount) {
   if (!ensureLocalProfileName()) {
     setLobbyMessage("Enter your name first.", true);
@@ -1816,14 +1861,17 @@ async function createRoomAndConnect(gameName, playerCount) {
   }
 
   try {
-    startLocalGame(gameName, playerCount);
-    setLobbyMessage(`Game "${gameName}" created locally.`);
+    const roomCode = await generateRoomCode();
+    const initialGame = buildCreatedGameState(gameName, playerCount);
+    await set(ref(dbInstance, `${ROOMS_PATH}/${roomCode}`), serializeGameState(initialGame));
+    await connectToRoom(roomCode, { createIfMissing: false });
+    setLobbyMessage(`Game "${gameName}" created.`);
   } catch (error) {
-    console.error("Failed to create local game:", error);
+    console.error("Failed to create room:", error);
     roomRef = null;
     currentRoomCode = "";
     updateRoomUi();
-    setLobbyMessage("Could not create local game. Try again.", true);
+    setLobbyMessage("Could not create game. Try again.", true);
   }
 }
 
@@ -2061,7 +2109,6 @@ async function init() {
   attachStaticEventHandlers();
   updateRoomUi();
   renderAll();
-  void clearStoredGamesFromDatabase();
 
   if (!ensureLocalProfileName()) {
     openNameModal();
