@@ -55,6 +55,7 @@ const connectPanel = document.getElementById("connectPanel");
 const lobbyMessageEl = document.getElementById("lobbyMessage");
 const createGameBtn = document.getElementById("createGameBtn");
 const joinGameBtn = document.getElementById("joinGameBtn");
+const changeNameBtn = document.getElementById("changeNameBtn");
 const mainContent = document.getElementById("mainContent");
 const backSelectBtn = document.getElementById("backSelect");
 const leaveConfirmOverlay = document.getElementById("leaveConfirm");
@@ -1214,7 +1215,11 @@ async function saveNameFromModal() {
     console.error("Failed to sync name to database:", error);
   }
   closeNameModal();
-  setLobbyMessage(`Welcome ${name}`);
+
+  if (currentRoomCode) {
+    syncMySeatNameIfNeeded();
+  }
+  setLobbyMessage("Username saved.");
   return true;
 }
 
@@ -1520,6 +1525,10 @@ function attachStaticEventHandlers() {
     joinGameBtn.addEventListener("click", openJoinGameModal);
   }
 
+  if (changeNameBtn) {
+    changeNameBtn.addEventListener("click", openNameModal);
+  }
+
   if (cancelCreateGameBtn) {
     cancelCreateGameBtn.addEventListener("click", closeCreateGameModal);
   }
@@ -1667,7 +1676,7 @@ async function init() {
     openNameModal();
     setLobbyMessage("Enter your name to continue.");
   } else {
-    setLobbyMessage(`Welcome ${localProfile.name}`);
+    setLobbyMessage("");
   }
 }
 
