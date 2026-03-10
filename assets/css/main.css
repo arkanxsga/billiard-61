@@ -366,8 +366,16 @@ button:hover:not(:disabled) {
 .connect-actions {
   margin-top: 10px;
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
-  justify-content: center;
+}
+
+.connect-actions button {
+  width: 100%;
+  min-height: 48px;
+  font-size: 18px;
+  font-weight: 700;
 }
 
 .room-code-label {
