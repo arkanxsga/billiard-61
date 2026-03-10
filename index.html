@@ -22,13 +22,8 @@
       css.href = `./assets/css/main.css?v=${bust}`;
       head.appendChild(css);
 
-      const firebase = document.createElement("script");
-      firebase.type = "module";
-      firebase.src = `./assets/js/firebase-init.js?v=${bust}`;
-      head.appendChild(firebase);
-
       const app = document.createElement("script");
-      app.defer = true;
+      app.type = "module";
       app.src = `./assets/js/app.js?v=${bust}`;
       head.appendChild(app);
     })();
